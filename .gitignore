@@ -1,0 +1,43 @@
+# ========================================
+# 1. DEPENDENCIES (Never upload these)
+# ========================================
+node_modules/
+
+# ========================================
+# 2. SECRETS & CREDENTIALS (CRITICAL)
+# ========================================
+.env
+google-credentials.json
+*.pem
+*.key
+
+# ========================================
+# 3. BUILD OUTPUTS (TypeScript compiled files)
+# ========================================
+dist/
+build/
+*.js
+!*.config.js  # Keep config files like webpack.config.js if you ever use them
+*.tsbuildinfo
+
+# ========================================
+# 4. LOGS (Keeps your repo clean)
+# ========================================
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ========================================
+# 5. OS & EDITOR FILES (Personal settings)
+# ========================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
