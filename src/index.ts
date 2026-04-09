@@ -78,26 +78,28 @@ bot.on(message('text'), async (ctx) => {
             chat = model.startChat();
             userSessions.set(userId, chat);
         }   
-const now = new Date();
-const todayFormatted = now.toLocaleDateString('en-MY', { 
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kuala_Lumpur' 
-});
-const contextPrompt = `
-[SYSTEM CONTEXT]
-Today is ${todayFormatted}. 
-Current Year: ${now.getFullYear()}.
-Current Month: ${now.getMonth() + 1}.
-Reference: If the user provides a date range like "24-26", calculate the start and end dates accordingly.
-ACTION: Always execute the calendar tool. DO NOT JUST CHAT.
+        const now = new Date();
+        const todayFormatted = now.toLocaleDateString('en-MY', { 
+            weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Asia/Kuala_Lumpur' 
+        });
+        const contextPrompt = `
+        [SYSTEM CONTEXT]
+        Today is ${todayFormatted}. 
+        Current Year: ${now.getFullYear()}.
+        Current Month: ${now.getMonth() + 1}.
+        Reference: If the user provides a date range like "24-26", calculate the start and end dates accordingly.
+        ACTION: Always execute the calendar tool. DO NOT JUST CHAT.
 
-[MESSAGE]: ${userMessage}`;
+        [MESSAGE]: ${userMessage}`;
 
         let result = await chat.sendMessage(contextPrompt);
         let response = result.response;
         let functionCalls = response.functionCalls();
-console.log('🤖 AI Intent:', functionCalls ? `Calling Tool: ${functionCalls[0].name}` : 'Just Chatting');
+        console.log('🤖 AI Intent:', functionCalls ? `Calling Tool: ${functionCalls[0].name}` : 'Just Chatting');
         if (functionCalls && functionCalls.length > 0) {
-            await handleToolCall(functionCalls[0], chat, ctx);
+             for (const call of functionCalls) {
+                await handleToolCall(call, chat, ctx);
+            }
             userSessions.delete(userId);
         } else {
             await ctx.reply(response.text());
@@ -127,7 +129,9 @@ bot.on(message('photo'), async (ctx) => {
         let functionCalls = response.functionCalls();
 
         if (functionCalls && functionCalls.length > 0) {
-            await handleToolCall(functionCalls[0], chat, ctx);
+            for (const call of functionCalls) {
+                await handleToolCall(call, chat, ctx);
+            }
         } else {
             await ctx.reply(response.text());
         }
@@ -149,7 +153,9 @@ bot.on(message('voice'), async (ctx) => {
         let functionCalls = response.functionCalls();
 
         if (functionCalls && functionCalls.length > 0) {
-            await handleToolCall(functionCalls[0], chat, ctx);
+            for (const call of functionCalls) {
+                await handleToolCall(call, chat, ctx);
+            }
         } else {
             await ctx.reply(response.text());
         }
@@ -163,14 +169,15 @@ bot.on(message('document'), async (ctx) => {
     await ctx.sendChatAction('typing');
     try {
         const document = ctx.message.document;
+        const mimeType = document.mime_type || '';
 
-        if (!document.mime_type?.startsWith('image/')) {
+    if (!mimeType.startsWith('image/') && mimeType !== 'application/pdf') {
             await ctx.reply("I can only process image documents for receipts right now.");
             return;
         }
 
-        const imagePart = await getGeminiFilePart(document.file_id, document.mime_type);
-        const caption = ctx.message.caption || "Please analyze this image. If it is a receipt, use 'log_expense'. If it contains meeting or event details, use 'create_calendar_event' to schedule it.";
+        const imagePart = await getGeminiFilePart(document.file_id, mimeType);
+        const caption = ctx.message.caption || "This is a list of expenses. Extract every single outgoing transaction from this document and call the 'log_expense' tool for EACH ONE. If it contains meeting or event details, use 'create_calendar_event' to schedule it. ";
         const chat = model.startChat();
         
         let result = await chat.sendMessage([imagePart, caption]);
@@ -178,7 +185,9 @@ bot.on(message('document'), async (ctx) => {
         let functionCalls = response.functionCalls();
 
         if (functionCalls && functionCalls.length > 0) {
-            await handleToolCall(functionCalls[0], chat, ctx);
+            for (const call of functionCalls) {
+                await handleToolCall(call, chat, ctx);
+            }
         } else {
             await ctx.reply(response.text());
         }
