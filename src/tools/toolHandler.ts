@@ -6,7 +6,8 @@ import {
     addFixedExpenseToSheet,
     updateFixedExpensePrice,
     getAllFixedExpenses,
-    deleteFixedExpense
+    deleteFixedExpense,
+    logBulkExpensesToSheet
 } from '../services/sheetsService';
 import { createCalendarEvent, getSchedule } from '../services/calendarService';
 
@@ -133,5 +134,12 @@ else if (call.name === 'check_schedule') {
     }]);
 
     await ctx.reply(nextResult.response.text());
+}
+else if (call.name === 'log_bulk_expenses') {
+    // Tell TypeScript to treat call.args as 'any' so we can grab .expenses
+    const expensesArray = (call.args as any).expenses;
+    
+    await logBulkExpensesToSheet(expensesArray);
+    await ctx.reply(`✅ Successfully scanned the statement and logged ${expensesArray.length} expenses into your Google Sheet!`);
 }
 }

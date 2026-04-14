@@ -2,7 +2,7 @@ import { FunctionDeclaration, SchemaType } from '@google/generative-ai';
 
 export const logExpenseDeclaration: FunctionDeclaration = {
     name: 'log_expense',
-    description: 'Logs a SINGLE, ONE-TIME expense. DO NOT use this if the user mentions "every month", "recurring", "fixed", or specifies a day of the month.',
+    description: 'Logs a SINGLE expense from a standard receipt or text message. DO NOT use this tool if the user uploads a bank statement, credit card statement, or list of multiple expenses. Use log_bulk_expenses instead.',   
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -10,6 +10,10 @@ export const logExpenseDeclaration: FunctionDeclaration = {
             currency: { type: SchemaType.STRING, description: 'The currency code, e.g., MYR or USD.' },
             category: { type: SchemaType.STRING, description: 'Category of expense, e.g., Food, Transport.' },
             description: { type: SchemaType.STRING, description: 'Brief description of what was purchased.' },
+            date: { 
+                type: SchemaType.STRING, 
+                 description: "Format: YYYY-MM-DD. MUST be the exact date the transaction occurred. Look at the receipt date to determine the correct year. NEVER use the current system date." 
+            },
         },
         required: ['amount', 'currency', 'category', 'description'],
     },
@@ -111,5 +115,34 @@ export const checkScheduleDeclaration: FunctionDeclaration = {
             }
         },
         required: ['date'],
+    },
+};
+
+export const logBulkExpensesDeclaration: FunctionDeclaration = {
+    name: 'log_bulk_expenses',
+    description: 'Use this when extracting multiple transactions from a bank statement or long list. It logs an array of expenses all at once.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            expenses: {
+                type: SchemaType.ARRAY,
+                description: 'A list of all the outgoing expenses found in the document.',
+                items: {
+                    type: SchemaType.OBJECT,
+                    properties: {
+                      amount: { type: SchemaType.NUMBER, description: 'The cost or amount spent.' },
+                        currency: { type: SchemaType.STRING, description: 'The currency code, e.g., MYR or USD.' },
+                        category: { type: SchemaType.STRING, description: 'Category of expense, e.g., Food, Transport.' },
+                        description: { type: SchemaType.STRING, description: 'Brief description of what was purchased.' },
+                        date: { 
+                            type: SchemaType.STRING, 
+                            description: "Format: YYYY-MM-DD. MUST be the exact date the transaction occurred. Look at the statement's billing period or statement date to determine the correct year. NEVER use the current system date." 
+                        },
+                    },
+                    required: ['amount', 'currency', 'category', 'description'],
+                }
+            }
+        },
+        required: ['expenses'],
     },
 };

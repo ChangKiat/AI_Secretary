@@ -12,7 +12,8 @@ import {
     updateFixedExpenseDeclaration, 
     getAllFixedExpensesDeclaration, 
     deleteFixedExpenseDeclaration,
-    createCalendarEventDeclaration 
+    createCalendarEventDeclaration,
+    logBulkExpensesDeclaration 
 } from './tools/tools';
 import { handleToolCall } from './tools/toolHandler';
 import { SYSTEM_INSTRUCTION } from './config/config';
@@ -33,7 +34,7 @@ cron.schedule('0 9 * * *', async () => {
         let loggedList = "";
 
         for (const exp of expensesToLog) {
-            await appendExpenseToSheet(exp.amount, exp.currency, exp.category, exp.description);
+            await appendExpenseToSheet(exp.date, exp.amount, exp.currency, exp.category, exp.description);
             loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount})`;
         }
 
@@ -48,10 +49,20 @@ cron.schedule('0 9 * * *', async () => {
 });
 
 //grantCalendarAccess();
+// Add this right before bot.launch()
+bot.catch((err, ctx) => {
+    console.error(`🚨 CRITICAL ERROR in ${ctx.updateType} event:`);
+    console.error(err);
+});
+
 bot.launch(() => console.log('🤖 Secretary Bot is running...'));
 
 const model = genAI.getGenerativeModel({
     model: 'gemini-2.5-flash',
+    generationConfig: {
+        maxOutputTokens: 8192, 
+        temperature: 0.1, // Pro-tip: Low temperature forces it to be a strict robot, not a creative writer!
+    },
 tools: [{ 
         functionDeclarations: [
             logExpenseDeclaration, 
@@ -61,7 +72,8 @@ tools: [{
             getAllFixedExpensesDeclaration,
             deleteFixedExpenseDeclaration,
             createCalendarEventDeclaration,
-            checkScheduleDeclaration
+            checkScheduleDeclaration,
+            logBulkExpensesDeclaration
         ] 
     }],
     systemInstruction: SYSTEM_INSTRUCTION
@@ -102,7 +114,14 @@ bot.on(message('text'), async (ctx) => {
             }
             userSessions.delete(userId);
         } else {
-            await ctx.reply(response.text());
+            const aiText = response.text();
+            
+            if (aiText && aiText.trim().length > 0) {
+                await ctx.reply(aiText);
+            } else {
+                // Fallback message just in case Gemini goes totally silent
+                await ctx.reply("I read the document, but I couldn't find any expenses or events to log.");
+            }
         }
 
     } catch (error: any) {
@@ -133,7 +152,14 @@ bot.on(message('photo'), async (ctx) => {
                 await handleToolCall(call, chat, ctx);
             }
         } else {
-            await ctx.reply(response.text());
+            const aiText = response.text();
+            
+            if (aiText && aiText.trim().length > 0) {
+                await ctx.reply(aiText);
+            } else {
+                // Fallback message just in case Gemini goes totally silent
+                await ctx.reply("I read the document, but I couldn't find any expenses or events to log.");
+            }
         }
     } catch (error) {
         console.error('Error processing image:', error);
@@ -157,7 +183,14 @@ bot.on(message('voice'), async (ctx) => {
                 await handleToolCall(call, chat, ctx);
             }
         } else {
-            await ctx.reply(response.text());
+            const aiText = response.text();
+            
+            if (aiText && aiText.trim().length > 0) {
+                await ctx.reply(aiText);
+            } else {
+                // Fallback message just in case Gemini goes totally silent
+                await ctx.reply("I read the document, but I couldn't find any expenses or events to log.");
+            }
         }
     } catch (error) {
         console.error('Error processing voice:', error);
@@ -166,8 +199,8 @@ bot.on(message('voice'), async (ctx) => {
 });
 
 bot.on(message('document'), async (ctx) => {
-    await ctx.sendChatAction('typing');
     try {
+        await ctx.sendChatAction('typing');
         const document = ctx.message.document;
         const mimeType = document.mime_type || '';
 
@@ -177,7 +210,13 @@ bot.on(message('document'), async (ctx) => {
         }
 
         const imagePart = await getGeminiFilePart(document.file_id, mimeType);
-        const caption = ctx.message.caption || "This is a list of expenses. Extract every single outgoing transaction from this document and call the 'log_expense' tool for EACH ONE. If it contains meeting or event details, use 'create_calendar_event' to schedule it. ";
+        const caption = ctx.message.caption || `You are an expert financial data extractor. You MUST extract all outgoing transactions from this document using the appropriate tool.
+            CRITICAL RULES:
+            1. If this is a bank/credit card statement with multiple items, you MUST use the 'log_bulk_expenses' tool.
+            2. IGNORE summary headers at the top (e.g., "Minimum Payment", "Total Balance"). ONLY extract the individual line items.
+            3. DATE RULE: Look at the document's statement date to determine the correct year. NEVER use today's system date.
+            4. If it is a single receipt, use 'log_expense'. 
+            5. If it is an event flyer, use 'create_calendar_event'.`;
         const chat = model.startChat();
         
         let result = await chat.sendMessage([imagePart, caption]);
@@ -189,7 +228,18 @@ bot.on(message('document'), async (ctx) => {
                 await handleToolCall(call, chat, ctx);
             }
         } else {
-            await ctx.reply(response.text());
+            const aiText = response.text();
+            
+            console.log("🤖 AI Raw Text Response:", aiText); 
+            
+            // ADD THIS LINE: This asks the API *why* it stopped generating
+            console.log("🛑 Finish Reason:", response.candidates?.[0]?.finishReason);
+            
+            if (aiText && aiText.trim().length > 0) {
+                await ctx.reply(aiText);
+            } else {
+                await ctx.reply("I read the document, but I couldn't find any expenses or events to log.");
+            }
         }
     } catch (error) {
         console.error('Error processing document:', error);

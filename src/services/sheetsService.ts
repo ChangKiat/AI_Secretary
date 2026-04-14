@@ -5,13 +5,7 @@ import { googleAuth } from './googleClient';
 const sheets = google.sheets({ version: 'v4', auth: googleAuth });
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID!;
 
-export async function appendExpenseToSheet(amount: number, currency: string, category: string, description: string) {
-    const timestamp = new Date().toLocaleString('en-MY', { 
-        timeZone: 'Asia/Kuala_Lumpur',
-        dateStyle: 'short',
-        timeStyle: 'short'
-    });
-
+export async function appendExpenseToSheet(date: string,amount: number, currency: string, category: string, description: string) {
     try {
         await sheets.spreadsheets.values.append({
             spreadsheetId: SPREADSHEET_ID,
@@ -19,8 +13,8 @@ export async function appendExpenseToSheet(amount: number, currency: string, cat
             valueInputOption: 'USER_ENTERED',
             requestBody: {
                 values: [
-                    [timestamp, amount, currency, category, description]
-                ],
+[date, amount, currency || 'MYR', category || 'General', description]        
+        ],
             },
         });
         return true;
@@ -255,5 +249,30 @@ export async function deleteFixedExpense(searchDescription: string): Promise<boo
     } catch (error) {
         console.error('Error deleting fixed expense:', error);
         throw new Error('Failed to delete the recurring expense.');
+    }
+}
+export async function logBulkExpensesToSheet(expenses: any[]) {
+    try {
+        // THE FIX: Order this array exactly how your columns appear in Sheets!
+        // Column A: Date, Column B: Amount, Column C: Currency, Column D: Category, Column E: Description
+        const values = expenses.map(exp => [
+            exp.date, 
+            exp.amount, 
+            exp.currency || 'MYR', // Fallback just in case the AI misses it
+            exp.category || 'General', 
+            exp.description
+        ]);
+
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'Expenses!A:E', // Make sure this spans from A to E!
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values },
+        });
+
+        console.log(`Successfully logged ${expenses.length} expenses in bulk!`);
+    } catch (error: any) {
+        console.error('Error logging bulk to Sheets:', error.message);
+        throw error;
     }
 }
