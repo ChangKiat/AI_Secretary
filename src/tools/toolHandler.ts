@@ -15,13 +15,11 @@ export async function handleToolCall(call: FunctionCall, chat: ChatSession, ctx:
     
     // --- 1. LOG SINGLE EXPENSE ---
     if (call.name === 'log_expense') {
-        const args = call.args as { amount: number; currency?: string; category?: string; description: string; };
-        const currency = args.currency || 'MYR';
-        const category = args.category || 'General';
+        const { date, amount, currency, category, description } = call.args as any;
 
-        await appendExpenseToSheet(args.amount, currency, category, args.description);
+        await appendExpenseToSheet(date, amount, currency, category, description);       
         await chat.sendMessage([{ functionResponse: { name: 'log_expense', response: { status: 'success' } } }]);
-        await ctx.reply(`✅ Logged ${currency} ${args.amount} for ${args.description} (${category}).`);
+        await ctx.reply(`✅ Logged RM ${amount} for ${description || category} on ${date}.`);
     } 
     
     // --- 2. GET SUMMARY ---
