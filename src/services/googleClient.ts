@@ -1,9 +1,6 @@
 import { google } from 'googleapis';
 
-const scopes = [
-    'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/calendar'
-];
+const scopes = ['https://www.googleapis.com/auth/calendar'];
 
 let auth;
 

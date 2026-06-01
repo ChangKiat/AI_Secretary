@@ -1,3 +1,4 @@
+/** @deprecated Use expenseService.ts + Supabase. Kept for reference / one-time migration via scripts/migrate-sheets-to-db.ts */
 import 'dotenv/config';
 import { google } from 'googleapis';
 import { googleAuth } from './googleClient';

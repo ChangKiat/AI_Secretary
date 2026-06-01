@@ -1,9 +1,12 @@
 {
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@supabase/supabase-js": "^2.106.2",
     "dotenv": "^17.3.1",
+    "drizzle-orm": "^0.45.2",
     "googleapis": "^171.4.0",
     "node-cron": "^4.2.1",
+    "postgres": "^3.4.9",
     "telegraf": "^4.16.3",
     "typescript": "^6.0.2"
   },
@@ -14,6 +17,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "db:push": "drizzle-kit push",
+    "migrate:sheets": "tsx scripts/migrate-sheets-to-db.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -21,6 +27,8 @@
   "license": "ISC",
   "devDependencies": {
     "@types/node": "^25.5.2",
-    "@types/node-cron": "^3.0.11"
+    "@types/node-cron": "^3.0.11",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.22.3"
   }
 }

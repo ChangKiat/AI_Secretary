@@ -1,85 +1,125 @@
-# 🤖 AI Secretary Telegram Bot
+# AI Secretary Telegram Bot
 
-A highly proactive, AI-powered personal assistant built with Node.js and TypeScript. This bot uses the Google Gemini API to understand natural language and autonomously execute function calls to manage Google Calendar events and track financial expenses in Google Sheets.
+A proactive personal assistant built with Node.js and TypeScript. Uses Google Gemini function calling to manage finances, Google Calendar, gym workouts, and nutrition tracking—all stored in Supabase PostgreSQL.
 
-## ✨ Features
-- **Conversational UI:** Interact naturally via Telegram.
-- **Autonomous Scheduling:** Extracts dates/times from chat and creates Google Calendar events.
-- **Financial Tracking:** Logs expenses and recurring bills to Google Sheets.
-- **Agentic Routing:** Uses Gemini Function Calling to intelligently route commands to the correct API.
+## Features
 
-## 📋 Prerequisites
-Before you begin, ensure you have the following installed and set up:
-- [Node.js](https://nodejs.org/) (v18 or higher)
-- A Telegram Bot Token (from [@BotFather](https://t.me/botfather))
-- A Google Gemini API Key
-- A Google Cloud Service Account with access to Google Calendar and Google Sheets APIs.
+- **Conversational UI** via Telegram (text, voice, photos, PDFs)
+- **Cost-optimized AI**: `gemini-2.5-flash-lite` by default, `gemini-2.5-flash` for heavy PDF extraction
+- **Finances**: Log expenses, recurring bills, spending summaries (Supabase)
+- **Calendar**: Create events and check schedule (Google Calendar)
+- **Gym**: Log workouts, view history, get suggestions
+- **Nutrition**: Log meals from photos with protein estimates, daily summaries, meal suggestions
+- **Automated billing**: Cron logs fixed expenses at 9:00 AM (Asia/Kuala_Lumpur)
 
-## 🚀 Local Installation
+## Prerequisites
 
-1. **Clone the repository:**
-   ```bash
-   git clone <your-repository-url>
-   cd AI_Secretary
-   ```
-2. **Install dependencies:**
+- Node.js v18+
+- Telegram Bot Token ([@BotFather](https://t.me/botfather))
+- Google Gemini API Key
+- Supabase project (Postgres + optional Storage bucket)
+- Google Cloud service account with **Calendar API** enabled
 
-  ```bash
-  npm install
-  ```
-## ⚙️ Configuration
+## Setup
 
-1. **Environment Variables:**
-Create a .env file in the root directory and add your API keys:
+### 1. Install dependencies
 
-  ```Code snippet
-  TELEGRAM_BOT_TOKEN=your_telegram_token_here
-  GEMINI_API_KEY=your_gemini_api_key_here
-  SPREADSHEET_ID=your_google_sheet_id_here
-  ```
-
-2. **Google Credentials:**
-Place your Google Service Account JSON key file in the root directory and rename it exactly to:
-```google-credentials.json```
-(Note: This file is securely ignored by Git).
-
-## 💻 Running the Bot Locally
-For Local Development:
-To run the bot directly using TypeScript with hot-reloading:
-
-  ```Bash
-  npx tsx src/index.ts
-  ```
-
-## ☁️ Cloud Deployment (Free Hosting)
-To host this bot online 24/7 for free, we recommend using Koyeb or Render.
-
-**Step 1: Prepare ```package.json```**
-
-Ensure your ```package.json``` has the correct build and start scripts required by cloud servers:
-
-  ```
-  JSON
-  "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js"
-  }
+```bash
+npm install
 ```
-**Step 2: Push to GitHub**
 
-Commit your code and push it to a private or public GitHub repository. (Ensure your ```.gitignore``` is working so you don't upload your credentials!)
+### 2. Environment variables
 
-**Step 3: Deploy to Cloud**
+Copy `env.example` to `.env` and fill in your values.
 
-1. Log into Koyeb or Render and create a new Web Service.
-2. Connect your GitHub account and select this repository.
-3. Set the Build Command to ```npm install && npm run build.```
-4. Set the Start Command to ```npm start.```
-5. **Crucial:** In the hosting dashboard's Environment Variables section, manually add your ```TELEGRAM_BOT_TOKEN```,``` GEMINI_API_KEY```, and ```SPREADSHEET_ID```.
-6. For your ```google-credentials.json```, you will need to stringify the JSON and save it as an Environment Variable (e.g., ```GOOGLE_CREDENTIALS_JSON```), then update ```googleClient.ts``` to parse it from the environment.
+For `DATABASE_URL`, open Supabase → **Project Settings → Database** and copy the **Session pooler** or **Transaction pooler** connection string (IPv4-friendly). Avoid the direct `db.<project-ref>.supabase.co:5432` URI on home networks without working IPv6.
 
-## 📂 Project Architecture
-This project follows a strict separation of concerns for clean scaling:
-- /src/services - Google API wrappers (calendarService.ts, sheetsService.ts).
-- /src/tools - The Action registry orchestrating AI and Services (toolHandler.ts).
-- /src/config - System prompts and configuration.
+### 3. Create database tables
+
+In the Supabase SQL Editor, run the contents of [`scripts/init-db.sql`](scripts/init-db.sql).
+
+Or with Drizzle Kit (requires `DATABASE_URL`):
+
+```bash
+npm run db:push
+```
+
+### 4. Supabase Storage (optional, for meal photos)
+
+1. Create a public bucket named `meal-photos` (or match `SUPABASE_STORAGE_BUCKET`)
+2. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `.env`
+
+Without Storage, meal photos are stored as Telegram `file_id` references.
+
+### 5. Google credentials
+
+Place `google-credentials.json` in the project root, or set `GOOGLE_CREDENTIALS_JSON` (stringified JSON) for cloud hosting.
+
+### 6. Migrate from Google Sheets (one-time)
+
+If you have existing data in Google Sheets:
+
+```bash
+# Temporarily re-enable Sheets read scope on service account
+# Set SPREADSHEET_ID in .env
+npm run migrate:sheets
+```
+
+Compare row counts in Supabase before removing `SPREADSHEET_ID`.
+
+## Running
+
+**Development:**
+
+```bash
+npm run dev
+```
+
+**Production:**
+
+```bash
+npm run build
+npm start
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/setprotein 180` | Set daily protein target (grams) |
+
+## Photo captions
+
+Send photos with captions to route intent:
+
+- **Receipt** (default): expense logging
+- **food / lunch / protein / meal**: nutrition + `log_meal`
+- **gym / workout / bench**: workout logging
+
+## Project structure
+
+```
+src/
+  config/       # System prompt, Gemini model factory
+  db/           # Drizzle schema + Postgres client
+  services/     # expense, gym, nutrition, calendar
+  tools/        # Gemini function declarations + handlers
+  index.ts      # Telegram bot entry point
+scripts/
+  init-db.sql
+  migrate-sheets-to-db.ts
+```
+
+## Cloud deployment
+
+Deploy to Render/Koyeb with:
+
+- Build: `npm install && npm run build`
+- Start: `npm start`
+- Env vars: all values from `env.example` (use `GOOGLE_CREDENTIALS_JSON` instead of a file)
+
+## Model cost tips
+
+- Default model is Flash-Lite (~6x cheaper output than 2.5 Flash)
+- PDF bank statements use the heavy model automatically
+- Adjust via `GEMINI_MODEL_DEFAULT` and `GEMINI_MODEL_HEAVY`

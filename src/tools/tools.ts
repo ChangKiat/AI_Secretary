@@ -146,3 +146,117 @@ export const logBulkExpensesDeclaration: FunctionDeclaration = {
         required: ['expenses'],
     },
 };
+
+export const logWorkoutDeclaration: FunctionDeclaration = {
+    name: 'log_workout',
+    description: 'Logs a gym exercise session. Use when the user reports workouts, sets, reps, or weights.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            date: { type: SchemaType.STRING, description: 'YYYY-MM-DD. Use receipt/context date, not today unless specified.' },
+            exercise: { type: SchemaType.STRING, description: 'Exercise name e.g. Bench Press, Squat.' },
+            sets: { type: SchemaType.NUMBER, description: 'Number of sets.' },
+            reps: { type: SchemaType.NUMBER, description: 'Reps per set.' },
+            weightKg: { type: SchemaType.NUMBER, description: 'Weight in kg.' },
+            durationMin: { type: SchemaType.NUMBER, description: 'Cardio duration in minutes.' },
+            notes: { type: SchemaType.STRING, description: 'Optional notes.' },
+        },
+        required: ['exercise'],
+    },
+};
+
+export const getWorkoutHistoryDeclaration: FunctionDeclaration = {
+    name: 'get_workout_history',
+    description: 'Retrieves workout history for a date range or exercise filter.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            startDate: { type: SchemaType.STRING, description: 'YYYY-MM-DD' },
+            endDate: { type: SchemaType.STRING, description: 'YYYY-MM-DD' },
+            exercise: { type: SchemaType.STRING, description: 'Optional exercise name filter.' },
+        },
+    },
+};
+
+export const suggestWorkoutDeclaration: FunctionDeclaration = {
+    name: 'suggest_workout',
+    description: 'Fetches recent workout history and suggests the next training session based on patterns.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            focus: { type: SchemaType.STRING, description: 'Optional focus: push, pull, legs, cardio, full body.' },
+        },
+    },
+};
+
+export const logMealDeclaration: FunctionDeclaration = {
+    name: 'log_meal',
+    description: 'Logs a meal with estimated protein and macros. Use after analyzing food photos or text descriptions.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            date: { type: SchemaType.STRING, description: 'YYYY-MM-DD' },
+            mealType: { type: SchemaType.STRING, description: 'breakfast, lunch, dinner, snack.' },
+            description: { type: SchemaType.STRING, description: 'What was eaten.' },
+            proteinG: { type: SchemaType.NUMBER, description: 'Estimated protein in grams.' },
+            carbsG: { type: SchemaType.NUMBER, description: 'Estimated carbs in grams.' },
+            fatG: { type: SchemaType.NUMBER, description: 'Estimated fat in grams.' },
+            calories: { type: SchemaType.NUMBER, description: 'Estimated calories.' },
+        },
+        required: ['description', 'proteinG'],
+    },
+};
+
+export const getNutritionSummaryDeclaration: FunctionDeclaration = {
+    name: 'get_nutrition_summary',
+    description: 'Gets protein and macro totals vs daily target for a date range.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            startDate: { type: SchemaType.STRING, description: 'YYYY-MM-DD' },
+            endDate: { type: SchemaType.STRING, description: 'YYYY-MM-DD' },
+        },
+        required: ['startDate', 'endDate'],
+    },
+};
+
+export const suggestMealDeclaration: FunctionDeclaration = {
+    name: 'suggest_meal',
+    description: 'Suggests high-protein foods based on remaining daily protein target.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            date: { type: SchemaType.STRING, description: 'YYYY-MM-DD. Defaults to today if omitted.' },
+        },
+    },
+};
+
+export const updateUserSettingsDeclaration: FunctionDeclaration = {
+    name: 'update_user_settings',
+    description: 'Updates user preferences such as daily protein target in grams.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            dailyProteinTargetG: { type: SchemaType.NUMBER, description: 'Daily protein goal in grams.' },
+        },
+    },
+};
+
+export const allFunctionDeclarations: FunctionDeclaration[] = [
+    logExpenseDeclaration,
+    getSummaryDeclaration,
+    addFixedExpenseDeclaration,
+    updateFixedExpenseDeclaration,
+    getAllFixedExpensesDeclaration,
+    deleteFixedExpenseDeclaration,
+    createCalendarEventDeclaration,
+    checkScheduleDeclaration,
+    logBulkExpensesDeclaration,
+    logWorkoutDeclaration,
+    getWorkoutHistoryDeclaration,
+    suggestWorkoutDeclaration,
+    logMealDeclaration,
+    getNutritionSummaryDeclaration,
+    suggestMealDeclaration,
+    updateUserSettingsDeclaration,
+];
