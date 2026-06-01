@@ -191,7 +191,8 @@ export const suggestWorkoutDeclaration: FunctionDeclaration = {
 
 export const logMealDeclaration: FunctionDeclaration = {
     name: 'log_meal',
-    description: 'Logs a meal with estimated protein and macros. Use after analyzing food photos or text descriptions.',
+    description:
+        'Logs a meal with full estimated macros. Always provide protein, carbs, fat, and calories from photo or text. Values are approximate.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -203,13 +204,14 @@ export const logMealDeclaration: FunctionDeclaration = {
             fatG: { type: SchemaType.NUMBER, description: 'Estimated fat in grams.' },
             calories: { type: SchemaType.NUMBER, description: 'Estimated calories.' },
         },
-        required: ['description', 'proteinG'],
+        required: ['description', 'proteinG', 'carbsG', 'fatG', 'calories'],
     },
 };
 
 export const getNutritionSummaryDeclaration: FunctionDeclaration = {
     name: 'get_nutrition_summary',
-    description: 'Gets protein and macro totals vs daily target for a date range.',
+    description:
+        'Gets calories, protein, carbs, and fat totals vs daily targets for a date range. Use for "how am I doing today" questions.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -222,7 +224,8 @@ export const getNutritionSummaryDeclaration: FunctionDeclaration = {
 
 export const suggestMealDeclaration: FunctionDeclaration = {
     name: 'suggest_meal',
-    description: 'Suggests high-protein foods based on remaining daily protein target.',
+    description:
+        'Suggests foods based on remaining daily protein, calorie, carb, and fat targets.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -233,11 +236,14 @@ export const suggestMealDeclaration: FunctionDeclaration = {
 
 export const updateUserSettingsDeclaration: FunctionDeclaration = {
     name: 'update_user_settings',
-    description: 'Updates user preferences such as daily protein target in grams.',
+    description: 'Updates daily nutrition targets (calories, protein, carbs, fat in grams).',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
             dailyProteinTargetG: { type: SchemaType.NUMBER, description: 'Daily protein goal in grams.' },
+            dailyCalorieTarget: { type: SchemaType.NUMBER, description: 'Daily calorie goal.' },
+            dailyCarbsTargetG: { type: SchemaType.NUMBER, description: 'Daily carbs goal in grams.' },
+            dailyFatTargetG: { type: SchemaType.NUMBER, description: 'Daily fat goal in grams.' },
         },
     },
 };

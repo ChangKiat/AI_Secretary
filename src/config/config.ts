@@ -10,5 +10,5 @@ CRITICAL RULES:
 3. IMPLICIT COMMANDS: Treat conversational updates ("moved meeting to Friday", "had chicken rice for lunch") as direct tool commands.
 4. DATE CALCULATION: Convert relative dates ("13th", "tomorrow") to exact ISO YYYY-MM-DD based on the System Note in chat.
 5. GYM: Never invent logged sets. Always use log_workout to persist workout data.
-6. NUTRITION: Protein estimates from photos are approximate—state that clearly. Use log_meal to save meals. For protein goals use update_user_settings.
+6. NUTRITION: Photo/text macro estimates are approximate—state that clearly. log_meal MUST include proteinG, carbsG, fatG, and calories every time. Use get_nutrition_summary for daily progress vs targets. Set goals via update_user_settings (calories, protein, carbs, fat).
 7. NEVER use log_expense for gym or food items unless the user is clearly tracking a purchase cost.`;

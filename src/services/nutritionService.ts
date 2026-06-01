@@ -6,6 +6,46 @@ import { meals, userSettings } from '../db/schema';
 const DEFAULT_PROTEIN_TARGET = parseFloat(
     process.env.DEFAULT_PROTEIN_TARGET_G || '150'
 );
+const DEFAULT_CALORIE_TARGET = parseFloat(
+    process.env.DEFAULT_CALORIE_TARGET || '2200'
+);
+const DEFAULT_CARBS_TARGET = parseFloat(process.env.DEFAULT_CARBS_TARGET_G || '250');
+const DEFAULT_FAT_TARGET = parseFloat(process.env.DEFAULT_FAT_TARGET_G || '70');
+
+export interface NutritionTargets {
+    dailyProteinTargetG: number;
+    dailyCalorieTarget: number;
+    dailyCarbsTargetG: number;
+    dailyFatTargetG: number;
+    timezone: string;
+}
+
+export interface DayMacros {
+    protein: number;
+    carbs: number;
+    fat: number;
+    calories: number;
+    meals: string[];
+}
+
+export interface MealLogInput {
+    description: string;
+    mealType?: string;
+    proteinG: number;
+    carbsG: number;
+    fatG: number;
+    calories: number;
+}
+
+function parseSettingsRow(row: typeof userSettings.$inferSelect): NutritionTargets {
+    return {
+        dailyProteinTargetG: parseFloat(row.dailyProteinTargetG),
+        dailyCalorieTarget: parseFloat(row.dailyCalorieTarget),
+        dailyCarbsTargetG: parseFloat(row.dailyCarbsTargetG),
+        dailyFatTargetG: parseFloat(row.dailyFatTargetG),
+        timezone: row.timezone,
+    };
+}
 
 function getSupabase() {
     const url = process.env.SUPABASE_URL;
@@ -14,7 +54,7 @@ function getSupabase() {
     return createClient(url, key);
 }
 
-export async function getOrCreateUserSettings(telegramUserId: number) {
+export async function getOrCreateUserSettings(telegramUserId: number): Promise<NutritionTargets> {
     const db = requireDb();
     const existing = await db
         .select()
@@ -22,28 +62,67 @@ export async function getOrCreateUserSettings(telegramUserId: number) {
         .where(eq(userSettings.telegramUserId, telegramUserId));
 
     if (existing.length > 0) {
-        return {
-            dailyProteinTargetG: parseFloat(existing[0].dailyProteinTargetG),
-            timezone: existing[0].timezone,
-        };
+        return parseSettingsRow(existing[0]);
     }
 
     await db.insert(userSettings).values({
         telegramUserId,
         dailyProteinTargetG: String(DEFAULT_PROTEIN_TARGET),
+        dailyCalorieTarget: String(DEFAULT_CALORIE_TARGET),
+        dailyCarbsTargetG: String(DEFAULT_CARBS_TARGET),
+        dailyFatTargetG: String(DEFAULT_FAT_TARGET),
         timezone: 'Asia/Kuala_Lumpur',
     });
 
-    return { dailyProteinTargetG: DEFAULT_PROTEIN_TARGET, timezone: 'Asia/Kuala_Lumpur' };
+    return {
+        dailyProteinTargetG: DEFAULT_PROTEIN_TARGET,
+        dailyCalorieTarget: DEFAULT_CALORIE_TARGET,
+        dailyCarbsTargetG: DEFAULT_CARBS_TARGET,
+        dailyFatTargetG: DEFAULT_FAT_TARGET,
+        timezone: 'Asia/Kuala_Lumpur',
+    };
+}
+
+export async function getNutritionTargets(telegramUserId: number): Promise<NutritionTargets> {
+    return getOrCreateUserSettings(telegramUserId);
 }
 
 export async function updateProteinTarget(telegramUserId: number, targetG: number) {
+    await updateNutritionTargets(telegramUserId, { dailyProteinTargetG: targetG });
+}
+
+export async function updateNutritionTargets(
+    telegramUserId: number,
+    targets: Partial<
+        Pick<
+            NutritionTargets,
+            'dailyProteinTargetG' | 'dailyCalorieTarget' | 'dailyCarbsTargetG' | 'dailyFatTargetG'
+        >
+    >
+) {
     const db = requireDb();
     await getOrCreateUserSettings(telegramUserId);
-    await db
-        .update(userSettings)
-        .set({ dailyProteinTargetG: String(targetG) })
-        .where(eq(userSettings.telegramUserId, telegramUserId));
+
+    const set: Record<string, string> = {};
+    if (targets.dailyProteinTargetG != null) {
+        set.dailyProteinTargetG = String(targets.dailyProteinTargetG);
+    }
+    if (targets.dailyCalorieTarget != null) {
+        set.dailyCalorieTarget = String(targets.dailyCalorieTarget);
+    }
+    if (targets.dailyCarbsTargetG != null) {
+        set.dailyCarbsTargetG = String(targets.dailyCarbsTargetG);
+    }
+    if (targets.dailyFatTargetG != null) {
+        set.dailyFatTargetG = String(targets.dailyFatTargetG);
+    }
+
+    if (Object.keys(set).length > 0) {
+        await db
+            .update(userSettings)
+            .set(set)
+            .where(eq(userSettings.telegramUserId, telegramUserId));
+    }
 }
 
 export async function uploadMealPhoto(
@@ -95,13 +174,55 @@ export async function logMeal(
     });
 }
 
+function emptyDayMacros(): DayMacros {
+    return { protein: 0, carbs: 0, fat: 0, calories: 0, meals: [] };
+}
+
+function addRowToDay(byDate: Record<string, DayMacros>, row: typeof meals.$inferSelect) {
+    if (!byDate[row.date]) byDate[row.date] = emptyDayMacros();
+    const day = byDate[row.date];
+    day.protein += parseFloat(row.proteinG);
+    if (row.carbsG) day.carbs += parseFloat(row.carbsG);
+    if (row.fatG) day.fat += parseFloat(row.fatG);
+    if (row.calories) day.calories += parseFloat(row.calories);
+    day.meals.push(row.description);
+}
+
+export function buildDayProgress(
+    consumed: DayMacros,
+    targets: NutritionTargets
+) {
+    return {
+        calories: {
+            consumed: Math.round(consumed.calories),
+            target: targets.dailyCalorieTarget,
+            remaining: Math.max(0, targets.dailyCalorieTarget - consumed.calories),
+        },
+        protein: {
+            consumed: Math.round(consumed.protein),
+            target: targets.dailyProteinTargetG,
+            remaining: Math.max(0, targets.dailyProteinTargetG - consumed.protein),
+        },
+        carbs: {
+            consumed: Math.round(consumed.carbs),
+            target: targets.dailyCarbsTargetG,
+            remaining: Math.max(0, targets.dailyCarbsTargetG - consumed.carbs),
+        },
+        fat: {
+            consumed: Math.round(consumed.fat),
+            target: targets.dailyFatTargetG,
+            remaining: Math.max(0, targets.dailyFatTargetG - consumed.fat),
+        },
+    };
+}
+
 export async function getNutritionSummary(
     telegramUserId: number,
     startDate: string,
     endDate: string
 ) {
     const db = requireDb();
-    const settings = await getOrCreateUserSettings(telegramUserId);
+    const targets = await getOrCreateUserSettings(telegramUserId);
     const rows = await db
         .select()
         .from(meals)
@@ -114,41 +235,100 @@ export async function getNutritionSummary(
         );
 
     let totalProtein = 0;
+    let totalCarbs = 0;
+    let totalFat = 0;
     let totalCalories = 0;
-    const byDate: Record<string, { protein: number; meals: string[] }> = {};
+    const byDate: Record<string, DayMacros> = {};
 
     for (const row of rows) {
         const protein = parseFloat(row.proteinG);
-        totalProtein += protein;
-        if (row.calories) totalCalories += parseFloat(row.calories);
+        const carbs = row.carbsG ? parseFloat(row.carbsG) : 0;
+        const fat = row.fatG ? parseFloat(row.fatG) : 0;
+        const calories = row.calories ? parseFloat(row.calories) : 0;
 
-        if (!byDate[row.date]) byDate[row.date] = { protein: 0, meals: [] };
-        byDate[row.date].protein += protein;
-        byDate[row.date].meals.push(row.description);
+        totalProtein += protein;
+        totalCarbs += carbs;
+        totalFat += fat;
+        totalCalories += calories;
+        addRowToDay(byDate, row);
     }
 
-    const dayCount =
-        Math.max(
-            1,
-            Math.ceil(
-                (new Date(endDate).getTime() - new Date(startDate).getTime()) /
-                    (1000 * 60 * 60 * 24)
-            ) + 1
-        );
+    const dayCount = Math.max(
+        1,
+        Math.ceil(
+            (new Date(endDate).getTime() - new Date(startDate).getTime()) /
+                (1000 * 60 * 60 * 24)
+        ) + 1
+    );
+
+    const rangeTotals: DayMacros = {
+        protein: totalProtein,
+        carbs: totalCarbs,
+        fat: totalFat,
+        calories: totalCalories,
+        meals: [],
+    };
+    const progressByDate: Record<string, ReturnType<typeof buildDayProgress>> = {};
+    for (const [date, day] of Object.entries(byDate)) {
+        progressByDate[date] = buildDayProgress(day, targets);
+    }
 
     return {
-        totalProtein,
-        totalCalories,
-        dailyTarget: settings.dailyProteinTargetG,
+        totalProtein: Math.round(totalProtein),
+        totalCarbs: Math.round(totalCarbs),
+        totalFat: Math.round(totalFat),
+        totalCalories: Math.round(totalCalories),
+        targets,
+        dailyTarget: targets.dailyProteinTargetG,
         byDate,
+        progressByDate,
+        rangeProgress: buildDayProgress(rangeTotals, targets),
         mealCount: rows.length,
         daysInRange: dayCount,
     };
 }
 
-export async function getTodayProteinRemaining(telegramUserId: number, date: string) {
+export async function getTodayMacroProgress(telegramUserId: number, date: string) {
     const summary = await getNutritionSummary(telegramUserId, date, date);
-    const consumed = summary.byDate[date]?.protein ?? 0;
-    const remaining = Math.max(0, summary.dailyTarget - consumed);
-    return { consumed, remaining, target: summary.dailyTarget };
+    const consumed = summary.byDate[date] ?? emptyDayMacros();
+    return {
+        consumed,
+        progress: buildDayProgress(consumed, summary.targets),
+        targets: summary.targets,
+    };
+}
+
+export function formatMealLogReply(meal: MealLogInput, date: string, todayProgress: ReturnType<typeof buildDayProgress>) {
+    const mealLine = meal.mealType
+        ? `${meal.description} (${meal.mealType})`
+        : meal.description;
+    const p = Math.round(meal.proteinG);
+    const c = Math.round(meal.carbsG);
+    const f = Math.round(meal.fatG);
+    const cal = Math.round(meal.calories);
+
+    const t = todayProgress;
+    return (
+        `🍽️ ${mealLine}\n` +
+        `Cal ${cal} · Protein ${p}g · Carbs ${c}g · Fat ${f}g\n` +
+        `Today: ${t.calories.consumed}/${t.calories.target} cal · ` +
+        `Protein ${t.protein.consumed}/${t.protein.target}g · ` +
+        `Carbs ${t.carbs.consumed}/${t.carbs.target}g · ` +
+        `Fat ${t.fat.consumed}/${t.fat.target}g\n` +
+        `(approximate estimates)`
+    );
+}
+
+export async function getTodayProteinRemaining(telegramUserId: number, date: string) {
+    const { progress, targets } = await getTodayMacroProgress(telegramUserId, date);
+    return {
+        consumed: progress.protein.consumed,
+        remaining: progress.protein.remaining,
+        target: targets.dailyProteinTargetG,
+        caloriesRemaining: progress.calories.remaining,
+        carbsRemaining: progress.carbs.remaining,
+        fatRemaining: progress.fat.remaining,
+        progress,
+        targets,
+    };
 }

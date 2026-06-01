@@ -60,5 +60,8 @@ CREATE TABLE IF NOT EXISTS meals (
 CREATE TABLE IF NOT EXISTS user_settings (
     telegram_user_id BIGINT PRIMARY KEY,
     daily_protein_target_g NUMERIC(8, 2) NOT NULL DEFAULT 150,
+    daily_calorie_target NUMERIC(8, 2) NOT NULL DEFAULT 2200,
+    daily_carbs_target_g NUMERIC(8, 2) NOT NULL DEFAULT 250,
+    daily_fat_target_g NUMERIC(8, 2) NOT NULL DEFAULT 70,
     timezone TEXT NOT NULL DEFAULT 'Asia/Kuala_Lumpur'
 );

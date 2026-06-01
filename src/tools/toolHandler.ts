@@ -19,8 +19,10 @@ import {
     logMeal,
     getNutritionSummary,
     getTodayProteinRemaining,
-    updateProteinTarget,
+    getTodayMacroProgress,
+    updateNutritionTargets,
     uploadMealPhoto,
+    formatMealLogReply,
 } from '../services/nutritionService';
 
 export interface ToolCallOptions {
@@ -275,9 +277,9 @@ export async function handleToolCall(
             mealType?: string;
             description: string;
             proteinG: number;
-            carbsG?: number;
-            fatG?: number;
-            calories?: number;
+            carbsG: number;
+            fatG: number;
+            calories: number;
         };
         const date = args.date || todayISO();
         let photoPath: string | undefined;
@@ -304,12 +306,26 @@ export async function handleToolCall(
             args.calories,
             photoPath
         );
+
+        const { progress } = await getTodayMacroProgress(userId, date);
+        const meal = {
+            description: args.description,
+            mealType: args.mealType,
+            proteinG: args.proteinG,
+            carbsG: args.carbsG,
+            fatG: args.fatG,
+            calories: args.calories,
+        };
+
         await chat.sendMessage([
-            { functionResponse: { name: 'log_meal', response: { status: 'success' } } },
+            {
+                functionResponse: {
+                    name: 'log_meal',
+                    response: { status: 'success', meal, todayProgress: progress },
+                },
+            },
         ]);
-        await ctx.reply(
-            `🍽️ Logged ${args.description}: ~${args.proteinG}g protein on ${date}.`
-        );
+        await ctx.reply(formatMealLogReply(meal, date, progress));
     } else if (call.name === 'get_nutrition_summary') {
         const args = call.args as { startDate: string; endDate: string };
         const summary = await getNutritionSummary(userId, args.startDate, args.endDate);
@@ -326,16 +342,31 @@ export async function handleToolCall(
         ]);
         await ctx.reply(toolResult.response.text());
     } else if (call.name === 'update_user_settings') {
-        const args = call.args as { dailyProteinTargetG?: number };
-        if (args.dailyProteinTargetG) {
-            await updateProteinTarget(userId, args.dailyProteinTargetG);
-        }
+        const args = call.args as {
+            dailyProteinTargetG?: number;
+            dailyCalorieTarget?: number;
+            dailyCarbsTargetG?: number;
+            dailyFatTargetG?: number;
+        };
+        await updateNutritionTargets(userId, {
+            dailyProteinTargetG: args.dailyProteinTargetG,
+            dailyCalorieTarget: args.dailyCalorieTarget,
+            dailyCarbsTargetG: args.dailyCarbsTargetG,
+            dailyFatTargetG: args.dailyFatTargetG,
+        });
         await chat.sendMessage([
             { functionResponse: { name: 'update_user_settings', response: { status: 'success' } } },
         ]);
+
+        const parts: string[] = [];
+        if (args.dailyCalorieTarget) parts.push(`${args.dailyCalorieTarget} cal`);
+        if (args.dailyProteinTargetG) parts.push(`${args.dailyProteinTargetG}g protein`);
+        if (args.dailyCarbsTargetG) parts.push(`${args.dailyCarbsTargetG}g carbs`);
+        if (args.dailyFatTargetG) parts.push(`${args.dailyFatTargetG}g fat`);
+
         await ctx.reply(
-            args.dailyProteinTargetG
-                ? `✅ Daily protein target set to ${args.dailyProteinTargetG}g.`
+            parts.length > 0
+                ? `✅ Daily targets updated: ${parts.join(', ')}.`
                 : `✅ Settings updated.`
         );
     }

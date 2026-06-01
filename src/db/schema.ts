@@ -53,5 +53,8 @@ export const meals = pgTable('meals', {
 export const userSettings = pgTable('user_settings', {
     telegramUserId: bigint('telegram_user_id', { mode: 'number' }).primaryKey(),
     dailyProteinTargetG: numeric('daily_protein_target_g', { precision: 8, scale: 2 }).default('150').notNull(),
+    dailyCalorieTarget: numeric('daily_calorie_target', { precision: 8, scale: 2 }).default('2200').notNull(),
+    dailyCarbsTargetG: numeric('daily_carbs_target_g', { precision: 8, scale: 2 }).default('250').notNull(),
+    dailyFatTargetG: numeric('daily_fat_target_g', { precision: 8, scale: 2 }).default('70').notNull(),
     timezone: text('timezone').default('Asia/Kuala_Lumpur').notNull(),
 });

@@ -10,7 +10,7 @@ import {
     GEMINI_MODEL_DEFAULT,
     GEMINI_MODEL_HEAVY,
 } from './config/gemini';
-import { updateProteinTarget } from './services/nutritionService';
+import { updateProteinTarget, updateNutritionTargets } from './services/nutritionService';
 import cron from 'node-cron';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
@@ -67,6 +67,29 @@ bot.command('setprotein', async (ctx) => {
     await ctx.reply(`✅ Daily protein target set to ${target}g.`);
 });
 
+bot.command('settargets', async (ctx) => {
+    const parts = ctx.message.text.replace('/settargets', '').trim().split(/\s+/);
+    if (parts.length < 4) {
+        await ctx.reply('Usage: /settargets <calories> <protein_g> <carbs_g> <fat_g>\nExample: /settargets 2200 180 250 70');
+        return;
+    }
+    const [cal, protein, carbs, fat] = parts.map(parseFloat);
+    if (!cal || !protein || !carbs || !fat || cal <= 0 || protein <= 0 || carbs <= 0 || fat <= 0) {
+        await ctx.reply('All values must be positive numbers.');
+        return;
+    }
+    await updateNutritionTargets(ctx.from.id, {
+        dailyCalorieTarget: cal,
+        dailyProteinTargetG: protein,
+        dailyCarbsTargetG: carbs,
+        dailyFatTargetG: fat,
+    });
+    await ctx.reply(
+        `✅ Daily targets set:\n` +
+            `${cal} cal · ${protein}g protein · ${carbs}g carbs · ${fat}g fat`
+    );
+});
+
 bot.launch(() => {
     console.log('🤖 Secretary Bot is running...');
     console.log(`   Default model: ${GEMINI_MODEL_DEFAULT}`);
@@ -93,18 +116,52 @@ function buildContextPrompt(userMessage: string): string {
         [MESSAGE]: ${userMessage}`;
 }
 
-function getPhotoPrompt(caption: string): string {
+const GYM_KEYWORDS =
+    /\b(gym|workout|exercise|bench|squat|deadlift|training|leg day|push day|pull day)\b/;
+const FOOD_KEYWORDS =
+    /\b(food|meal|protein|lunch|dinner|breakfast|snack|nutrition|macro|calories|eat|ate)\b/;
+const RECEIPT_KEYWORDS =
+    /\b(receipt|bill|invoice|statement|expense|transaction|bank|credit card)\b/;
+
+function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boolean } {
     const lower = caption.toLowerCase();
-    if (/\b(gym|workout|exercise|bench|squat|deadlift|training|leg day|push day|pull day)\b/.test(lower)) {
-        return `You are a gym assistant. Analyze this image or caption and log workouts with log_workout. ${caption}`;
+    if (GYM_KEYWORDS.test(lower)) {
+        return {
+            prompt: `You are a gym assistant. Analyze this image or caption and log workouts with log_workout. ${caption}`,
+            useHeavyModel: false,
+        };
     }
-    if (/\b(food|meal|protein|lunch|dinner|breakfast|snack|nutrition|macro|calories)\b/.test(lower)) {
-        return `Estimate protein and macros from this meal photo. Call log_meal with your best estimates. Note values are approximate. ${caption}`;
+    if (FOOD_KEYWORDS.test(lower) || (!RECEIPT_KEYWORDS.test(lower) && caption.trim() === '')) {
+        return {
+            prompt:
+                `Analyze this meal image. Identify visible foods and estimate portions. ` +
+                `Call log_meal with description, mealType (if inferable), proteinG, carbsG, fatG, and calories. ` +
+                `All macro values are required and approximate. ${caption}`.trim(),
+            useHeavyModel: true,
+        };
     }
-    return (
-        caption ||
-        'Please process this receipt and log the expense using log_expense or log_bulk_expenses.'
-    );
+    if (RECEIPT_KEYWORDS.test(lower)) {
+        return {
+            prompt:
+                caption ||
+                'Process this receipt or statement. Use log_expense for a single receipt or log_bulk_expenses for statements.',
+            useHeavyModel: true,
+        };
+    }
+    return {
+        prompt:
+            `Classify this image first. ` +
+            `If it is FOOD: call log_meal with full macros (proteinG, carbsG, fatG, calories required). ` +
+            `If it is a RECEIPT or bank statement: use log_expense or log_bulk_expenses. ` +
+            `If it is GYM equipment or a workout: use log_workout. ` +
+            `Do not log food as expenses. ${caption}`.trim(),
+        useHeavyModel: true,
+    };
+}
+
+function isFinancialDocumentCaption(caption: string): boolean {
+    const lower = caption.toLowerCase();
+    return RECEIPT_KEYWORDS.test(lower);
 }
 
 async function runChatTurn(
@@ -167,24 +224,21 @@ bot.on(message('photo'), async (ctx) => {
         const photo = ctx.message.photo[ctx.message.photo.length - 1];
         const imagePart = await getGeminiFilePart(photo.file_id, 'image/jpeg');
         const caption = ctx.message.caption || '';
-        const prompt = getPhotoPrompt(caption);
-        const chat = defaultModel.startChat();
+        const { prompt, useHeavyModel } = getPhotoPrompt(caption);
+        const model = useHeavyModel ? heavyModel : defaultModel;
+        const chat = model.startChat();
 
         const fileLink = await bot.telegram.getFileLink(photo.file_id);
         const response = await fetch(fileLink.href);
         const photoBuffer = Buffer.from(await response.arrayBuffer());
 
-        await runChatTurn(
-            chat,
-            ctx,
-            [imagePart, prompt],
-            ctx.from.id,
-            {
-                photoFileId: photo.file_id,
-                photoBuffer,
-                photoMimeType: 'image/jpeg',
-            }
-        );
+        const toolOptions: import('./tools/toolHandler').ToolCallOptions = {
+            photoFileId: photo.file_id,
+            photoBuffer,
+            photoMimeType: 'image/jpeg',
+        };
+
+        await runChatTurn(chat, ctx, [imagePart, prompt], ctx.from.id, toolOptions);
     } catch (error) {
         console.error('Error processing image:', error);
         await ctx.reply('Sorry, I had trouble reading that image.');
@@ -221,8 +275,25 @@ bot.on(message('document'), async (ctx) => {
         }
 
         const imagePart = await getGeminiFilePart(document.file_id, mimeType);
+        const userCaption = ctx.message.caption || '';
+
+        if (mimeType.startsWith('image/') && !isFinancialDocumentCaption(userCaption)) {
+            const { prompt } = getPhotoPrompt(userCaption);
+            const chat = heavyModel.startChat();
+            const fileLink = await bot.telegram.getFileLink(document.file_id);
+            const fileResponse = await fetch(fileLink.href);
+            const photoBuffer = Buffer.from(await fileResponse.arrayBuffer());
+
+            await runChatTurn(chat, ctx, [imagePart, prompt], ctx.from.id, {
+                photoFileId: document.file_id,
+                photoBuffer,
+                photoMimeType: mimeType,
+            });
+            return;
+        }
+
         const caption =
-            ctx.message.caption ||
+            userCaption ||
             `You are an expert financial data extractor. Extract outgoing transactions using the appropriate tool.
             CRITICAL RULES:
             1. Bank/credit card statements with multiple items → log_bulk_expenses.
