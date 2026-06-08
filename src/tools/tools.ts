@@ -192,7 +192,7 @@ export const suggestWorkoutDeclaration: FunctionDeclaration = {
 export const logMealDeclaration: FunctionDeclaration = {
     name: 'log_meal',
     description:
-        'Logs a meal with full estimated macros. Always provide protein, carbs, fat, and calories from photo or text. Values are approximate.',
+        'Logs a meal with full estimated macros. For text or photo input, YOU must estimate and supply proteinG, carbsG, fatG, and calories—never ask the user for them. Scale estimates by quantity ("2 pcs", "one plate"). User-provided numbers override estimates only when explicitly stated. Values are approximate.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {

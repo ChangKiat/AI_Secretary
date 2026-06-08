@@ -119,7 +119,26 @@ function buildContextPrompt(userMessage: string): string {
 const GYM_KEYWORDS =
     /\b(gym|workout|exercise|bench|squat|deadlift|training|leg day|push day|pull day)\b/;
 const FOOD_KEYWORDS =
-    /\b(food|meal|protein|lunch|dinner|breakfast|snack|nutrition|macro|calories|eat|ate)\b/;
+    /\b(food|meal|protein|lunch|dinner|breakfast|snack|nutrition|macro|calories|eat|ate|eating|had|drank|drink|roti|nasi|mee|rice|kuih|teh|kopi|ayam|ikan|sambal|burger|pizza|sandwich|egg|toast|oats|salad|fruit)\b/;
+
+const NUTRITION_QUERY_KEYWORDS =
+    /\b(how much|how am i|summary|remaining|target|progress|total)\b.*\b(protein|calories|carbs|fat|macro|nutrition)\b|\b(protein|calories|carbs|fat|macro|nutrition)\b.*\b(today|remaining|target|progress|total|summary)\b/;
+
+function getTextFoodPrompt(userMessage: string): string {
+    const lower = userMessage.toLowerCase();
+    if (NUTRITION_QUERY_KEYWORDS.test(lower)) {
+        return '';
+    }
+    if (!FOOD_KEYWORDS.test(lower)) {
+        return '';
+    }
+    return (
+        `\n\n[FOOD LOG INSTRUCTION]\n` +
+        `The user is logging a meal from text. Identify the food(s) and quantity.\n` +
+        `Estimate proteinG, carbsG, fatG, and calories for a typical Malaysian portion.\n` +
+        `Call log_meal immediately. Do NOT ask the user for macro values.`
+    );
+}
 const RECEIPT_KEYWORDS =
     /\b(receipt|bill|invoice|statement|expense|transaction|bank|credit card)\b/;
 
@@ -205,7 +224,8 @@ bot.on(message('text'), async (ctx) => {
             chat = defaultModel.startChat();
             userSessions.set(userId, chat);
         }
-        await runChatTurn(chat, ctx, buildContextPrompt(userMessage), userId);
+        const prompt = buildContextPrompt(userMessage) + getTextFoodPrompt(userMessage);
+        await runChatTurn(chat, ctx, prompt, userId);
     } catch (error: any) {
         console.error('Error:', error);
         if (error.message?.includes('429 Too Many Requests')) {
