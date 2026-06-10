@@ -31,7 +31,7 @@ export const workouts = pgTable('workouts', {
     sets: integer('sets'),
     reps: integer('reps'),
     weightKg: numeric('weight_kg', { precision: 8, scale: 2 }),
-    durationMin: integer('duration_min'),
+    durationMin: numeric('duration_min', { precision: 8, scale: 2 }),
     notes: text('notes'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });

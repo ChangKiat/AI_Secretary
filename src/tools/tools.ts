@@ -158,7 +158,7 @@ export const logWorkoutDeclaration: FunctionDeclaration = {
             sets: { type: SchemaType.NUMBER, description: 'Number of sets.' },
             reps: { type: SchemaType.NUMBER, description: 'Reps per set.' },
             weightKg: { type: SchemaType.NUMBER, description: 'Weight in kg.' },
-            durationMin: { type: SchemaType.NUMBER, description: 'Cardio duration in minutes.' },
+            durationMin: { type: SchemaType.NUMBER, description: 'Duration in minutes. Use decimals for sub-minute holds (e.g. 0.5 for 30 sec plank).' },
             notes: { type: SchemaType.STRING, description: 'Optional notes.' },
         },
         required: ['exercise'],

@@ -225,21 +225,45 @@ export async function handleToolCall(
             notes?: string;
         };
         const date = args.date || todayISO();
-        await logWorkout(
-            userId,
-            date,
-            args.exercise,
-            args.sets,
-            args.reps,
-            args.weightKg,
-            args.durationMin,
-            args.notes
-        );
-        await chat.sendMessage([
-            { functionResponse: { name: 'log_workout', response: { status: 'success' } } },
-        ]);
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d811'},body:JSON.stringify({sessionId:'68d811',location:'toolHandler.ts:log_workout',message:'log_workout args received',data:{date,exercise:args.exercise,sets:args.sets,setsType:typeof args.sets,reps:args.reps,repsType:typeof args.reps,weightKg:args.weightKg,durationMin:args.durationMin,durationMinType:typeof args.durationMin,notes:args.notes},timestamp:Date.now(),hypothesisId:'A,B,F'})}).catch(()=>{});
+        // #endregion
+        try {
+            await logWorkout(
+                userId,
+                date,
+                args.exercise,
+                args.sets,
+                args.reps,
+                args.weightKg,
+                args.durationMin,
+                args.notes
+            );
+        } catch (err: unknown) {
+            const e = err as Error;
+            // #region agent log
+            fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d811'},body:JSON.stringify({sessionId:'68d811',location:'toolHandler.ts:log_workout',message:'logWorkout threw',data:{errorMessage:e?.message},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
+            // #endregion
+            throw err;
+        }
+        try {
+            await chat.sendMessage([
+                { functionResponse: { name: 'log_workout', response: { status: 'success' } } },
+            ]);
+        } catch (err: unknown) {
+            const e = err as Error;
+            // #region agent log
+            fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d811'},body:JSON.stringify({sessionId:'68d811',location:'toolHandler.ts:log_workout',message:'chat.sendMessage after log_workout failed',data:{errorMessage:e?.message},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
+            // #endregion
+            throw err;
+        }
         const detail = [
-            args.sets && args.reps ? `${args.sets}x${args.reps}` : null,
+            args.sets && args.reps ? `${args.sets}x${args.reps}` : args.sets ? `${args.sets} sets` : null,
+            args.durationMin != null
+                ? args.durationMin < 1
+                    ? `${Math.round(args.durationMin * 60)}sec`
+                    : `${args.durationMin}min`
+                : null,
             args.weightKg ? `${args.weightKg}kg` : null,
         ]
             .filter(Boolean)

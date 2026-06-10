@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS workouts (
     sets INTEGER,
     reps INTEGER,
     weight_kg NUMERIC(8, 2),
-    duration_min INTEGER,
+    duration_min NUMERIC(8, 2),
     notes TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );

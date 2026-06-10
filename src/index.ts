@@ -199,6 +199,9 @@ async function runChatTurn(
     );
 
     if (functionCalls && functionCalls.length > 0) {
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d811'},body:JSON.stringify({sessionId:'68d811',location:'index.ts:runChatTurn',message:'AI function calls',data:{calls:functionCalls.map(c=>({name:c.name,args:c.args}))},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
         for (const call of functionCalls) {
             await handleToolCall(call, chat, ctx, toolOptions);
         }
@@ -228,6 +231,9 @@ bot.on(message('text'), async (ctx) => {
         await runChatTurn(chat, ctx, prompt, userId);
     } catch (error: any) {
         console.error('Error:', error);
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d811'},body:JSON.stringify({sessionId:'68d811',location:'index.ts:textHandler',message:'Text handler error',data:{errorMessage:error?.message,errorName:error?.name,stack:error?.stack?.slice(0,500)},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
         if (error.message?.includes('429 Too Many Requests')) {
             await ctx.reply(
                 "⏳ Whoa, slow down! I'm hitting my API rate limit. Give me a moment to cool off."
