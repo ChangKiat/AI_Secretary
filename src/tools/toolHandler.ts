@@ -53,6 +53,9 @@ export async function handleToolCall(
 
     if (call.name === 'log_expense') {
         const { date, amount, currency, category, description } = call.args as any;
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',location:'toolHandler.ts:log_expense',message:'log_expense invoked',data:{date,amount,currency,category,description},timestamp:Date.now(),hypothesisId:'D,E'})}).catch(()=>{});
+        // #endregion
         await appendExpense(date, amount, currency, category, description);
         await chat.sendMessage([
             { functionResponse: { name: 'log_expense', response: { status: 'success' } } },
@@ -305,6 +308,9 @@ export async function handleToolCall(
             fatG: number;
             calories: number;
         };
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',location:'toolHandler.ts:log_meal',message:'log_meal invoked',data:{description:args.description,mealType:args.mealType,proteinG:args.proteinG},timestamp:Date.now(),hypothesisId:'D,E'})}).catch(()=>{});
+        // #endregion
         const date = args.date || todayISO();
         let photoPath: string | undefined;
 

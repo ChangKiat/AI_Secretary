@@ -124,12 +124,21 @@ const FOOD_KEYWORDS =
 const NUTRITION_QUERY_KEYWORDS =
     /\b(how much|how am i|summary|remaining|target|progress|total)\b.*\b(protein|calories|carbs|fat|macro|nutrition)\b|\b(protein|calories|carbs|fat|macro|nutrition)\b.*\b(today|remaining|target|progress|total|summary)\b/;
 
+const EXPENSE_PRICE_KEYWORDS =
+    /\b(rm|myr|\$|usd|spent|paid|cost|price|ringgit)\s*[\d.]|\b[\d.]+\s*(rm|myr|ringgit)\b/i;
+
 function getTextFoodPrompt(userMessage: string): string {
     const lower = userMessage.toLowerCase();
-    if (NUTRITION_QUERY_KEYWORDS.test(lower)) {
+    const hasFoodKeywords = FOOD_KEYWORDS.test(lower);
+    const hasPriceKeywords = EXPENSE_PRICE_KEYWORDS.test(userMessage);
+    const isNutritionQuery = NUTRITION_QUERY_KEYWORDS.test(lower);
+    // #region agent log
+    fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',location:'index.ts:getTextFoodPrompt',message:'Text routing keyword analysis',data:{userMessage,hasFoodKeywords,hasPriceKeywords,isNutritionQuery,foodMatch:hasFoodKeywords?lower.match(FOOD_KEYWORDS)?.[0]:null,priceMatch:hasPriceKeywords?userMessage.match(EXPENSE_PRICE_KEYWORDS)?.[0]:null},timestamp:Date.now(),hypothesisId:'A,B,C'})}).catch(()=>{});
+    // #endregion
+    if (isNutritionQuery) {
         return '';
     }
-    if (!FOOD_KEYWORDS.test(lower)) {
+    if (!hasFoodKeywords) {
         return '';
     }
     return (
@@ -200,7 +209,7 @@ async function runChatTurn(
 
     if (functionCalls && functionCalls.length > 0) {
         // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d811'},body:JSON.stringify({sessionId:'68d811',location:'index.ts:runChatTurn',message:'AI function calls',data:{calls:functionCalls.map(c=>({name:c.name,args:c.args}))},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',location:'index.ts:runChatTurn',message:'AI function calls',data:{calls:functionCalls.map(c=>({name:c.name,args:c.args}))},timestamp:Date.now(),hypothesisId:'D,E'})}).catch(()=>{});
         // #endregion
         for (const call of functionCalls) {
             await handleToolCall(call, chat, ctx, toolOptions);
@@ -227,12 +236,16 @@ bot.on(message('text'), async (ctx) => {
             chat = defaultModel.startChat();
             userSessions.set(userId, chat);
         }
-        const prompt = buildContextPrompt(userMessage) + getTextFoodPrompt(userMessage);
+        const foodPrompt = getTextFoodPrompt(userMessage);
+        const prompt = buildContextPrompt(userMessage) + foodPrompt;
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',location:'index.ts:textHandler',message:'Final prompt suffix',data:{userMessage,foodPromptLength:foodPrompt.length,foodPromptPreview:foodPrompt.slice(0,120)},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         await runChatTurn(chat, ctx, prompt, userId);
     } catch (error: any) {
         console.error('Error:', error);
         // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d811'},body:JSON.stringify({sessionId:'68d811',location:'index.ts:textHandler',message:'Text handler error',data:{errorMessage:error?.message,errorName:error?.name,stack:error?.stack?.slice(0,500)},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',location:'index.ts:textHandler',message:'Text handler error',data:{errorMessage:error?.message,errorName:error?.name,stack:error?.stack?.slice(0,500)},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
         // #endregion
         if (error.message?.includes('429 Too Many Requests')) {
             await ctx.reply(
