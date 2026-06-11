@@ -132,9 +132,6 @@ function getTextFoodPrompt(userMessage: string): string {
     const hasFoodKeywords = FOOD_KEYWORDS.test(lower);
     const hasPriceKeywords = EXPENSE_PRICE_KEYWORDS.test(userMessage);
     const isNutritionQuery = NUTRITION_QUERY_KEYWORDS.test(lower);
-    // #region agent log
-    fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',location:'index.ts:getTextFoodPrompt',message:'Text routing keyword analysis',data:{userMessage,hasFoodKeywords,hasPriceKeywords,isNutritionQuery,foodMatch:hasFoodKeywords?lower.match(FOOD_KEYWORDS)?.[0]:null,priceMatch:hasPriceKeywords?userMessage.match(EXPENSE_PRICE_KEYWORDS)?.[0]:null},timestamp:Date.now(),hypothesisId:'A,B,C'})}).catch(()=>{});
-    // #endregion
     if (isNutritionQuery) {
         return '';
     }
@@ -142,9 +139,6 @@ function getTextFoodPrompt(userMessage: string): string {
         return '';
     }
     if (hasPriceKeywords) {
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',runId:'post-fix',location:'index.ts:getTextFoodPrompt',message:'Using food+expense dual prompt',data:{userMessage},timestamp:Date.now(),hypothesisId:'A,B'})}).catch(()=>{});
-        // #endregion
         return (
             `\n\n[FOOD + EXPENSE LOG INSTRUCTION]\n` +
             `The user is logging a food purchase with a stated price. Call BOTH tools:\n` +
@@ -220,9 +214,6 @@ async function runChatTurn(
     );
 
     if (functionCalls && functionCalls.length > 0) {
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',location:'index.ts:runChatTurn',message:'AI function calls',data:{calls:functionCalls.map(c=>({name:c.name,args:c.args}))},timestamp:Date.now(),hypothesisId:'D,E'})}).catch(()=>{});
-        // #endregion
         for (const call of functionCalls) {
             await handleToolCall(call, chat, ctx, toolOptions);
         }
@@ -248,17 +239,10 @@ bot.on(message('text'), async (ctx) => {
             chat = defaultModel.startChat();
             userSessions.set(userId, chat);
         }
-        const foodPrompt = getTextFoodPrompt(userMessage);
-        const prompt = buildContextPrompt(userMessage) + foodPrompt;
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',location:'index.ts:textHandler',message:'Final prompt suffix',data:{userMessage,foodPromptLength:foodPrompt.length,foodPromptPreview:foodPrompt.slice(0,120)},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
+        const prompt = buildContextPrompt(userMessage) + getTextFoodPrompt(userMessage);
         await runChatTurn(chat, ctx, prompt, userId);
     } catch (error: any) {
         console.error('Error:', error);
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',location:'index.ts:textHandler',message:'Text handler error',data:{errorMessage:error?.message,errorName:error?.name,stack:error?.stack?.slice(0,500)},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
-        // #endregion
         if (error.message?.includes('429 Too Many Requests')) {
             await ctx.reply(
                 "⏳ Whoa, slow down! I'm hitting my API rate limit. Give me a moment to cool off."

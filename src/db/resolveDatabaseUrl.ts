@@ -61,20 +61,12 @@ export async function canResolveHost(hostname: string): Promise<boolean> {
     }
 }
 
-async function probeDatabaseUrl(url: string, hypothesisId: string): Promise<boolean> {
-    const parsed = new URL(url);
+async function probeDatabaseUrl(url: string): Promise<boolean> {
     const sql = postgres(url, { connect_timeout: 8, max: 1 });
     try {
         await sql`SELECT 1`;
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ca014c'},body:JSON.stringify({sessionId:'ca014c',runId:'post-fix',hypothesisId,location:'src/db/resolveDatabaseUrl.ts:probeDatabaseUrl',message:'database probe succeeded',data:{host:parsed.hostname,port:parsed.port,user:parsed.username},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         return true;
-    } catch (e) {
-        const err = e as NodeJS.ErrnoException;
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ca014c'},body:JSON.stringify({sessionId:'ca014c',runId:'post-fix',hypothesisId,location:'src/db/resolveDatabaseUrl.ts:probeDatabaseUrl',message:'database probe failed',data:{host:parsed.hostname,port:parsed.port,code:err.code,message:err.message},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
+    } catch {
         return false;
     } finally {
         await sql.end({ timeout: 2 }).catch(() => {});
@@ -86,18 +78,18 @@ export async function resolveSupabaseDatabaseUrl(connectionString: string): Prom
     const preferredRegion = process.env.DATABASE_POOLER_REGION?.trim();
 
     if (isDirectSupabaseHost(parsed.hostname) && (await canResolveHost(parsed.hostname))) {
-        if (await probeDatabaseUrl(connectionString, 'H3')) {
+        if (await probeDatabaseUrl(connectionString)) {
             return connectionString;
         }
     }
 
-    if (isPoolerSupabaseHost(parsed.hostname) && (await probeDatabaseUrl(connectionString, 'H2'))) {
+    if (isPoolerSupabaseHost(parsed.hostname) && (await probeDatabaseUrl(connectionString))) {
         return connectionString;
     }
 
     const projectRef = projectRefFromUrl(parsed);
     if (!projectRef) {
-        if (await probeDatabaseUrl(connectionString, 'H3')) {
+        if (await probeDatabaseUrl(connectionString)) {
             return connectionString;
         }
         throw new Error(`Cannot connect using DATABASE_URL host "${parsed.hostname}".`);
@@ -107,14 +99,10 @@ export async function resolveSupabaseDatabaseUrl(connectionString: string): Prom
         ? [preferredRegion, ...POOLER_REGIONS.filter((r) => r !== preferredRegion)]
         : POOLER_REGIONS;
 
-    // #region agent log
-    fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ca014c'},body:JSON.stringify({sessionId:'ca014c',runId:'post-fix',hypothesisId:'H2',location:'src/db/resolveDatabaseUrl.ts:resolveSupabaseDatabaseUrl',message:'probing pooler regions',data:{projectRef,regionsToTry:regions.length,preferredRegion:preferredRegion||null},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
-
     for (const region of regions) {
         for (const port of [6543, 5432] as const) {
             const candidate = buildPoolerUrlForClient(projectRef, parsed.password, region, port);
-            if (await probeDatabaseUrl(candidate, 'H2')) {
+            if (await probeDatabaseUrl(candidate)) {
                 console.warn(`Using Supabase pooler (${region}:${port}) for project "${projectRef}".`);
                 return candidate;
             }

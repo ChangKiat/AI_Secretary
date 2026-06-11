@@ -23,21 +23,7 @@ export async function logWorkout(
         durationMin: durationMin != null ? String(durationMin) : null,
         notes: notes ?? null,
     };
-    // #region agent log
-    fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d811'},body:JSON.stringify({sessionId:'68d811',location:'gymService.ts:logWorkout',message:'inserting workout row',data:{row,setsType:typeof sets,repsType:typeof reps,durationMinType:typeof durationMin},timestamp:Date.now(),hypothesisId:'A,B,D'})}).catch(()=>{});
-    // #endregion
-    try {
-        await db.insert(workouts).values(row);
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d811'},body:JSON.stringify({sessionId:'68d811',location:'gymService.ts:logWorkout',message:'workout insert success',data:{exercise},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-        // #endregion
-    } catch (err: unknown) {
-        const e = err as Error;
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'68d811'},body:JSON.stringify({sessionId:'68d811',location:'gymService.ts:logWorkout',message:'workout insert failed',data:{errorMessage:e?.message,errorName:e?.name,row},timestamp:Date.now(),hypothesisId:'A,B,D'})}).catch(()=>{});
-        // #endregion
-        throw err;
-    }
+    await db.insert(workouts).values(row);
 }
 
 export async function getWorkoutHistory(
