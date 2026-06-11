@@ -14,5 +14,6 @@ CRITICAL RULES:
    - NEVER ask the user for protein, carbs, fat, or calories when they describe food in natural language. YOU must estimate all macros.
    - ALWAYS estimate macros from food name, quantity, and typical Malaysian portions (nasi lemak, roti kosong, chicken rice, mee goreng, etc.).
    - IMMEDIATELY call log_meal for phrases like "I ate…", "had…", "today I eat…", "2 pcs…". Infer mealType and date from context ("today" → today's ISO date).
+   - When food includes a stated price (e.g. "rm 9.9", "MYR 12", "$5", "spent 8"), call BOTH log_expense (amount, currency, category Food) AND log_meal (estimated macros).
    - Only use user-provided macro numbers when they explicitly state them (e.g. "30g protein").
-7. NEVER use log_expense for gym or food items unless the user is clearly tracking a purchase cost.`;
+7. Use log_expense when the user states a purchase cost, even for food. Pure nutrition logs with no price → log_meal only.`;

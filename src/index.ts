@@ -141,6 +141,18 @@ function getTextFoodPrompt(userMessage: string): string {
     if (!hasFoodKeywords) {
         return '';
     }
+    if (hasPriceKeywords) {
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5e2672'},body:JSON.stringify({sessionId:'5e2672',runId:'post-fix',location:'index.ts:getTextFoodPrompt',message:'Using food+expense dual prompt',data:{userMessage},timestamp:Date.now(),hypothesisId:'A,B'})}).catch(()=>{});
+        // #endregion
+        return (
+            `\n\n[FOOD + EXPENSE LOG INSTRUCTION]\n` +
+            `The user is logging a food purchase with a stated price. Call BOTH tools:\n` +
+            `1. log_expense with amount, currency (MYR if "rm"), category "Food", description (food + location).\n` +
+            `2. log_meal with estimated proteinG, carbsG, fatG, calories for the food.\n` +
+            `Do NOT ask the user for macro values.`
+        );
+    }
     return (
         `\n\n[FOOD LOG INSTRUCTION]\n` +
         `The user is logging a meal from text. Identify the food(s) and quantity.\n` +
