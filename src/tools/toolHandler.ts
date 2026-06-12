@@ -25,6 +25,8 @@ import {
     formatMealLogReply,
 } from '../services/nutritionService';
 
+export type ToolCallResult = 'complete' | 'awaiting_input';
+
 export interface ToolCallOptions {
     photoFileId?: string;
     photoBuffer?: Buffer;
@@ -48,7 +50,7 @@ export async function handleToolCall(
     chat: ChatSession,
     ctx: Context,
     options?: ToolCallOptions
-) {
+): Promise<ToolCallResult> {
     const userId = getUserId(ctx);
 
     if (call.name === 'log_expense') {
@@ -60,6 +62,7 @@ export async function handleToolCall(
         await ctx.reply(
             `✅ Logged ${currency || 'MYR'} ${amount} for ${description || category} on ${date || todayISO()}.`
         );
+        return 'complete';
     } else if (call.name === 'get_spending_summary') {
         const args = call.args as {
             category?: string;
@@ -77,6 +80,7 @@ export async function handleToolCall(
             { functionResponse: { name: 'get_spending_summary', response: summaryData } },
         ]);
         await ctx.reply(toolResult.response.text());
+        return 'complete';
     } else if (call.name === 'add_fixed_expense') {
         const args = call.args as {
             dayOfMonth?: number;
@@ -119,6 +123,7 @@ export async function handleToolCall(
         await ctx.reply(
             `🔄 Done! I've set up a ${freqWord} rule to log ${currency} ${args.amount} for ${description} on the ${finalDay} of the month.`
         );
+        return 'complete';
     } else if (call.name === 'update_fixed_expense') {
         const args = call.args as { description: string; newAmount: number };
         const updateStatus = await updateFixedExpensePrice(args.description, args.newAmount);
@@ -139,12 +144,14 @@ export async function handleToolCall(
                 `✅ Got it! I have updated your recurring ${args.description} bill to RM ${args.newAmount}.`
             );
         }
+        return 'complete';
     } else if (call.name === 'get_all_fixed_expenses') {
         const allExpenses = await getAllFixedExpenses();
         const toolResult = await chat.sendMessage([
             { functionResponse: { name: 'get_all_fixed_expenses', response: { expenses: allExpenses } } },
         ]);
         await ctx.reply(toolResult.response.text());
+        return 'complete';
     } else if (call.name === 'delete_fixed_expense') {
         const args = call.args as { description: string };
         const deleteStatus = await deleteFixedExpense(args.description);
@@ -165,6 +172,7 @@ export async function handleToolCall(
                 `🗑️ Done! I have completely removed "${args.description}" from your recurring bills.`
             );
         }
+        return 'complete';
     } else if (call.name === 'create_calendar_event') {
         const args = call.args as {
             title: string;
@@ -174,11 +182,23 @@ export async function handleToolCall(
         };
 
         if (!args.startDateTime) {
-            const retry = await chat.sendMessage(
-                'I need a specific date and time to schedule this. Please ask the user for the date and year.'
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'create_calendar_event',
+                        response: {
+                            status: 'incomplete',
+                            missing: ['startDateTime'],
+                            partial: { title: args.title, description: args.description },
+                        },
+                    },
+                },
+            ]);
+            const followUp = await chat.sendMessage(
+                'The event is missing a date/time. Ask the user one short question to get it.'
             );
-            await ctx.reply(retry.response.text());
-            return;
+            await ctx.reply(followUp.response.text());
+            return 'awaiting_input';
         }
 
         try {
@@ -197,9 +217,11 @@ export async function handleToolCall(
                     `👉 Please check your calendar on **"${args.startDateTime}"** or look for an invite email to confirm!`,
                 { parse_mode: 'Markdown' }
             );
+            return 'complete';
         } catch (error) {
             console.error('Tool Execution Error:', error);
             await ctx.reply('I had a problem connecting to the calendar. Please try again in a moment.');
+            return 'complete';
         }
     } else if (call.name === 'check_schedule') {
         const args = call.args as { date: string };
@@ -208,12 +230,14 @@ export async function handleToolCall(
             { functionResponse: { name: 'check_schedule', response: { schedule: scheduleData } } },
         ]);
         await ctx.reply(nextResult.response.text());
+        return 'complete';
     } else if (call.name === 'log_bulk_expenses') {
         const expensesArray = (call.args as any).expenses;
         await logBulkExpenses(expensesArray);
         await ctx.reply(
             `✅ Successfully scanned the statement and logged ${expensesArray.length} expenses!`
         );
+        return 'complete';
     } else if (call.name === 'log_workout') {
         const args = call.args as {
             date?: string;
@@ -252,6 +276,7 @@ export async function handleToolCall(
         await ctx.reply(
             `💪 Logged ${args.exercise}${detail ? ` (${detail})` : ''} on ${date}.`
         );
+        return 'complete';
     } else if (call.name === 'get_workout_history') {
         const args = call.args as { startDate?: string; endDate?: string; exercise?: string };
         const history = await getWorkoutHistory(
@@ -264,6 +289,7 @@ export async function handleToolCall(
             { functionResponse: { name: 'get_workout_history', response: { workouts: history } } },
         ]);
         await ctx.reply(toolResult.response.text());
+        return 'complete';
     } else if (call.name === 'suggest_workout') {
         const args = call.args as { focus?: string };
         const data = await getRecentWorkoutsForSuggestion(userId);
@@ -276,6 +302,7 @@ export async function handleToolCall(
             },
         ]);
         await ctx.reply(toolResult.response.text());
+        return 'complete';
     } else if (call.name === 'log_meal') {
         const args = call.args as {
             date?: string;
@@ -331,6 +358,7 @@ export async function handleToolCall(
             },
         ]);
         await ctx.reply(formatMealLogReply(meal, date, progress));
+        return 'complete';
     } else if (call.name === 'get_nutrition_summary') {
         const args = call.args as { startDate: string; endDate: string };
         const summary = await getNutritionSummary(userId, args.startDate, args.endDate);
@@ -338,6 +366,7 @@ export async function handleToolCall(
             { functionResponse: { name: 'get_nutrition_summary', response: summary } },
         ]);
         await ctx.reply(toolResult.response.text());
+        return 'complete';
     } else if (call.name === 'suggest_meal') {
         const args = call.args as { date?: string };
         const date = args.date || todayISO();
@@ -346,6 +375,7 @@ export async function handleToolCall(
             { functionResponse: { name: 'suggest_meal', response: remaining } },
         ]);
         await ctx.reply(toolResult.response.text());
+        return 'complete';
     } else if (call.name === 'update_user_settings') {
         const args = call.args as {
             dailyProteinTargetG?: number;
@@ -374,5 +404,8 @@ export async function handleToolCall(
                 ? `✅ Daily targets updated: ${parts.join(', ')}.`
                 : `✅ Settings updated.`
         );
+        return 'complete';
     }
+
+    return 'complete';
 }

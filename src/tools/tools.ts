@@ -84,7 +84,7 @@ export const deleteFixedExpenseDeclaration: FunctionDeclaration = {
 
 export const createCalendarEventDeclaration: FunctionDeclaration = {
     name: 'create_calendar_event',
-    description: 'Use this tool WHENEVER the user mentions scheduling, booking, or POSTPONING a meeting. Triggers on conversational updates like "I postponed the meeting to..."',
+    description: 'Use this tool WHENEVER the user mentions scheduling, booking, or POSTPONING a meeting. Triggers on conversational updates like "I postponed the meeting to...". Only call when you have a specific startDateTime. If time is missing, ask the user first.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {

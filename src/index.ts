@@ -16,7 +16,19 @@ import cron from 'node-cron';
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 const MY_CHAT_ID = process.env.MY_TELEGRAM_CHAT_ID!;
-const userSessions = new Map<number, ChatSession>();
+
+interface UserChatState {
+    chat: ChatSession;
+    turnCount: number;
+    lastActiveAt: number;
+    awaitingInput: boolean;
+}
+
+const MIN_TURNS = 2;
+const MAX_TURNS = 15;
+const SESSION_TTL_MS = 30 * 60 * 1000;
+
+const userSessions = new Map<number, UserChatState>();
 
 const defaultModel = createGeminiModel(genAI, GEMINI_MODEL_DEFAULT);
 const heavyModel = createGeminiModel(genAI, GEMINI_MODEL_HEAVY);
@@ -65,6 +77,11 @@ bot.command('setprotein', async (ctx) => {
     }
     await updateProteinTarget(ctx.from.id, target);
     await ctx.reply(`✅ Daily protein target set to ${target}g.`);
+});
+
+bot.command('reset', async (ctx) => {
+    userSessions.delete(ctx.from.id);
+    await ctx.reply('Conversation reset. How can I help?');
 });
 
 bot.command('settargets', async (ctx) => {
@@ -198,12 +215,50 @@ function isFinancialDocumentCaption(caption: string): boolean {
     return RECEIPT_KEYWORDS.test(lower);
 }
 
+function getOrCreateSession(userId: number): UserChatState {
+    const now = Date.now();
+    const existing = userSessions.get(userId);
+
+    if (existing) {
+        const idle = now - existing.lastActiveAt;
+        const expiredByTtl = idle > SESSION_TTL_MS && existing.turnCount >= MIN_TURNS;
+        if (expiredByTtl || existing.turnCount >= MAX_TURNS) {
+            userSessions.delete(userId);
+        } else {
+            existing.turnCount++;
+            existing.lastActiveAt = now;
+            return existing;
+        }
+    }
+
+    const state: UserChatState = {
+        chat: defaultModel.startChat(),
+        turnCount: 1,
+        lastActiveAt: now,
+        awaitingInput: false,
+    };
+    userSessions.set(userId, state);
+    return state;
+}
+
+function updateSessionState(
+    userId: number,
+    updates: Partial<Pick<UserChatState, 'awaitingInput'>>
+) {
+    const state = userSessions.get(userId);
+    if (state) {
+        Object.assign(state, updates);
+        state.lastActiveAt = Date.now();
+    }
+}
+
 async function runChatTurn(
     chat: ChatSession,
     ctx: import('telegraf').Context,
     prompt: string | (string | Record<string, unknown>)[],
     userId: number,
-    toolOptions?: import('./tools/toolHandler').ToolCallOptions
+    toolOptions?: import('./tools/toolHandler').ToolCallOptions,
+    trackSession = false
 ) {
     const result = await chat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
     const response = result.response;
@@ -214,16 +269,29 @@ async function runChatTurn(
     );
 
     if (functionCalls && functionCalls.length > 0) {
+        let shouldClearSession = true;
         for (const call of functionCalls) {
-            await handleToolCall(call, chat, ctx, toolOptions);
+            const toolResult = await handleToolCall(call, chat, ctx, toolOptions);
+            if (toolResult === 'awaiting_input') {
+                shouldClearSession = false;
+            }
         }
-        userSessions.delete(userId);
+        if (trackSession) {
+            if (shouldClearSession) {
+                userSessions.delete(userId);
+            } else {
+                updateSessionState(userId, { awaitingInput: true });
+            }
+        }
     } else {
         const aiText = response.text();
         if (aiText && aiText.trim().length > 0) {
             await ctx.reply(aiText);
         } else {
             await ctx.reply("I processed that, but I couldn't find anything to log or report.");
+        }
+        if (trackSession) {
+            updateSessionState(userId, { awaitingInput: true });
         }
     }
 }
@@ -234,13 +302,9 @@ bot.on(message('text'), async (ctx) => {
     await ctx.sendChatAction('typing');
 
     try {
-        let chat = userSessions.get(userId);
-        if (!chat) {
-            chat = defaultModel.startChat();
-            userSessions.set(userId, chat);
-        }
+        const session = getOrCreateSession(userId);
         const prompt = buildContextPrompt(userMessage) + getTextFoodPrompt(userMessage);
-        await runChatTurn(chat, ctx, prompt, userId);
+        await runChatTurn(session.chat, ctx, prompt, userId, undefined, true);
     } catch (error: any) {
         console.error('Error:', error);
         if (error.message?.includes('429 Too Many Requests')) {
