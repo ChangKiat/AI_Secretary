@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { expenses, fixedExpenses } from '../db/schema';
 
@@ -179,6 +179,95 @@ export async function deleteFixedExpense(
         .where(eq(fixedExpenses.id, match.id));
 
     return true;
+}
+
+export async function updateExpense(
+    id: number,
+    fields: {
+        date?: string;
+        amount?: number;
+        currency?: string;
+        category?: string;
+        description?: string;
+    }
+): Promise<boolean> {
+    const db = requireDb();
+    const set: Record<string, string> = {};
+
+    if (fields.date != null) set.date = fields.date;
+    if (fields.amount != null) set.amount = String(fields.amount);
+    if (fields.currency != null) set.currency = fields.currency;
+    if (fields.category != null) set.category = fields.category;
+    if (fields.description != null) set.description = fields.description;
+
+    if (Object.keys(set).length === 0) return false;
+
+    const result = await db.update(expenses).set(set).where(eq(expenses.id, id));
+    return (result.count ?? 0) > 0;
+}
+
+export async function deleteExpense(id: number): Promise<boolean> {
+    const db = requireDb();
+    const result = await db.delete(expenses).where(eq(expenses.id, id));
+    return (result.count ?? 0) > 0;
+}
+
+export async function getActiveFixedExpenses() {
+    const db = requireDb();
+    const rows = await db
+        .select()
+        .from(fixedExpenses)
+        .where(eq(fixedExpenses.active, true));
+
+    return rows.map((row) => ({
+        id: row.id,
+        description: row.description,
+        category: row.category,
+        amount: parseFloat(row.amount),
+        dayOfMonth: row.dayOfMonth,
+        frequencyMonths: row.frequencyMonths,
+        startMonth: row.startMonth,
+        currency: row.currency,
+    }));
+}
+
+export async function updateFixedExpenseById(
+    id: number,
+    fields: {
+        description?: string;
+        category?: string;
+        amount?: number;
+        dayOfMonth?: number;
+        frequencyMonths?: number;
+    }
+): Promise<boolean> {
+    const db = requireDb();
+    const set: Record<string, string | number> = {};
+
+    if (fields.description != null) set.description = fields.description;
+    if (fields.category != null) set.category = fields.category;
+    if (fields.amount != null) set.amount = String(fields.amount);
+    if (fields.dayOfMonth != null) set.dayOfMonth = fields.dayOfMonth;
+    if (fields.frequencyMonths != null) set.frequencyMonths = fields.frequencyMonths;
+
+    if (Object.keys(set).length === 0) return false;
+
+    const result = await db
+        .update(fixedExpenses)
+        .set(set)
+        .where(and(eq(fixedExpenses.id, id), eq(fixedExpenses.active, true)));
+
+    return (result.count ?? 0) > 0;
+}
+
+export async function deactivateFixedExpenseById(id: number): Promise<boolean> {
+    const db = requireDb();
+    const result = await db
+        .update(fixedExpenses)
+        .set({ active: false })
+        .where(and(eq(fixedExpenses.id, id), eq(fixedExpenses.active, true)));
+
+    return (result.count ?? 0) > 0;
 }
 
 export async function logBulkExpenses(expenseList: {

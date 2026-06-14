@@ -1,4 +1,4 @@
-import { eq, desc } from 'drizzle-orm';
+import { and, eq, desc } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { workouts } from '../db/schema';
 
@@ -48,6 +48,7 @@ export async function getWorkoutHistory(
             return true;
         })
         .map((row) => ({
+            id: row.id,
             date: row.date,
             exercise: row.exercise,
             sets: row.sets,
@@ -56,6 +57,53 @@ export async function getWorkoutHistory(
             durationMin: row.durationMin ? parseFloat(row.durationMin) : null,
             notes: row.notes,
         }));
+}
+
+export async function updateWorkout(
+    id: number,
+    telegramUserId: number,
+    fields: {
+        date?: string;
+        exercise?: string;
+        sets?: number | null;
+        reps?: number | null;
+        weightKg?: number | null;
+        durationMin?: number | null;
+        notes?: string | null;
+    }
+): Promise<boolean> {
+    const db = requireDb();
+    const set: Record<string, string | number | null> = {};
+
+    if (fields.date != null) set.date = fields.date;
+    if (fields.exercise != null) set.exercise = fields.exercise;
+    if (fields.sets !== undefined) set.sets = fields.sets;
+    if (fields.reps !== undefined) set.reps = fields.reps;
+    if (fields.weightKg !== undefined) {
+        set.weightKg = fields.weightKg != null ? String(fields.weightKg) : null;
+    }
+    if (fields.durationMin !== undefined) {
+        set.durationMin = fields.durationMin != null ? String(fields.durationMin) : null;
+    }
+    if (fields.notes !== undefined) set.notes = fields.notes;
+
+    if (Object.keys(set).length === 0) return false;
+
+    const result = await db
+        .update(workouts)
+        .set(set)
+        .where(and(eq(workouts.id, id), eq(workouts.telegramUserId, telegramUserId)));
+
+    return (result.count ?? 0) > 0;
+}
+
+export async function deleteWorkout(id: number, telegramUserId: number): Promise<boolean> {
+    const db = requireDb();
+    const result = await db
+        .delete(workouts)
+        .where(and(eq(workouts.id, id), eq(workouts.telegramUserId, telegramUserId)));
+
+    return (result.count ?? 0) > 0;
 }
 
 export async function getRecentWorkoutsForSuggestion(

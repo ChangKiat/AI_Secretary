@@ -31,6 +31,7 @@ export interface ToolCallOptions {
     photoFileId?: string;
     photoBuffer?: Buffer;
     photoMimeType?: string;
+    userCaption?: string;
 }
 
 function getUserId(ctx: Context): number {
@@ -45,6 +46,32 @@ function todayISO(): string {
     return `${y}-${m}-${d}`;
 }
 
+const RECEIPT_CAPTION_KEYWORDS =
+    /\b(receipt|bill|invoice|statement|expense|transaction|bank|credit card)\b/i;
+
+function resolveLogDate(argsDate: string | undefined, options?: ToolCallOptions): string {
+    const today = todayISO();
+    const caption = options?.userCaption ?? '';
+
+    if (/\btoday\b/i.test(caption)) {
+        return today;
+    }
+    if (!argsDate) {
+        return today;
+    }
+
+    const isPhoto = !!(options?.photoBuffer || options?.photoFileId);
+    if (isPhoto && !RECEIPT_CAPTION_KEYWORDS.test(caption)) {
+        const argsYear = parseInt(argsDate.slice(0, 4), 10);
+        const todayYear = parseInt(today.slice(0, 4), 10);
+        if (argsYear < todayYear) {
+            return today;
+        }
+    }
+
+    return argsDate;
+}
+
 export async function handleToolCall(
     call: FunctionCall,
     chat: ChatSession,
@@ -55,12 +82,13 @@ export async function handleToolCall(
 
     if (call.name === 'log_expense') {
         const { date, amount, currency, category, description } = call.args as any;
-        await appendExpense(date, amount, currency, category, description);
+        const resolvedDate = resolveLogDate(date, options);
+        await appendExpense(resolvedDate, amount, currency, category, description);
         await chat.sendMessage([
             { functionResponse: { name: 'log_expense', response: { status: 'success' } } },
         ]);
         await ctx.reply(
-            `✅ Logged ${currency || 'MYR'} ${amount} for ${description || category} on ${date || todayISO()}.`
+            `✅ Logged ${currency || 'MYR'} ${amount} for ${description || category} on ${resolvedDate}.`
         );
         return 'complete';
     } else if (call.name === 'get_spending_summary') {
@@ -313,7 +341,7 @@ export async function handleToolCall(
             fatG: number;
             calories: number;
         };
-        const date = args.date || todayISO();
+        const date = resolveLogDate(args.date, options);
         let photoPath: string | undefined;
 
         if (options?.photoBuffer && options.photoMimeType) {

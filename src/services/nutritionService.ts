@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { eq, and, gte, lte } from 'drizzle-orm';
+import { eq, and, gte, lte, desc } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { meals, userSettings } from '../db/schema';
 
@@ -317,6 +317,85 @@ export function formatMealLogReply(meal: MealLogInput, date: string, todayProgre
         `Fat ${t.fat.consumed}/${t.fat.target}g\n` +
         `(approximate estimates)`
     );
+}
+
+export async function getMealHistory(
+    telegramUserId: number,
+    startDate: string,
+    endDate: string
+) {
+    const db = requireDb();
+    const rows = await db
+        .select()
+        .from(meals)
+        .where(
+            and(
+                eq(meals.telegramUserId, telegramUserId),
+                gte(meals.date, startDate),
+                lte(meals.date, endDate)
+            )
+        )
+        .orderBy(desc(meals.date), desc(meals.id));
+
+    return rows.map((row) => ({
+        id: row.id,
+        date: row.date,
+        mealType: row.mealType,
+        description: row.description,
+        proteinG: parseFloat(row.proteinG),
+        carbsG: row.carbsG ? parseFloat(row.carbsG) : null,
+        fatG: row.fatG ? parseFloat(row.fatG) : null,
+        calories: row.calories ? parseFloat(row.calories) : null,
+    }));
+}
+
+export async function updateMeal(
+    id: number,
+    telegramUserId: number,
+    fields: {
+        date?: string;
+        description?: string;
+        mealType?: string | null;
+        proteinG?: number;
+        carbsG?: number | null;
+        fatG?: number | null;
+        calories?: number | null;
+    }
+): Promise<boolean> {
+    const db = requireDb();
+    const set: Record<string, string | null> = {};
+
+    if (fields.date != null) set.date = fields.date;
+    if (fields.description != null) set.description = fields.description;
+    if (fields.mealType !== undefined) set.mealType = fields.mealType;
+    if (fields.proteinG != null) set.proteinG = String(fields.proteinG);
+    if (fields.carbsG !== undefined) {
+        set.carbsG = fields.carbsG != null ? String(fields.carbsG) : null;
+    }
+    if (fields.fatG !== undefined) {
+        set.fatG = fields.fatG != null ? String(fields.fatG) : null;
+    }
+    if (fields.calories !== undefined) {
+        set.calories = fields.calories != null ? String(fields.calories) : null;
+    }
+
+    if (Object.keys(set).length === 0) return false;
+
+    const result = await db
+        .update(meals)
+        .set(set)
+        .where(and(eq(meals.id, id), eq(meals.telegramUserId, telegramUserId)));
+
+    return (result.count ?? 0) > 0;
+}
+
+export async function deleteMeal(id: number, telegramUserId: number): Promise<boolean> {
+    const db = requireDb();
+    const result = await db
+        .delete(meals)
+        .where(and(eq(meals.id, id), eq(meals.telegramUserId, telegramUserId)));
+
+    return (result.count ?? 0) > 0;
 }
 
 export async function getTodayProteinRemaining(telegramUserId: number, date: string) {

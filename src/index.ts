@@ -176,17 +176,42 @@ const RECEIPT_KEYWORDS =
 
 function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boolean } {
     const lower = caption.toLowerCase();
+    const hasPriceKeywords = EXPENSE_PRICE_KEYWORDS.test(caption);
+    const isTodayMeal = /\btoday\b/i.test(caption);
     if (GYM_KEYWORDS.test(lower)) {
         return {
             prompt: `You are a gym assistant. Analyze this image or caption and log workouts with log_workout. ${caption}`,
             useHeavyModel: false,
         };
     }
-    if (FOOD_KEYWORDS.test(lower) || (!RECEIPT_KEYWORDS.test(lower) && caption.trim() === '')) {
+    const isLikelyMealPhoto =
+        FOOD_KEYWORDS.test(lower) ||
+        hasPriceKeywords ||
+        isTodayMeal ||
+        (!RECEIPT_KEYWORDS.test(lower) && caption.trim() === '');
+    if (isLikelyMealPhoto) {
+        const dateInstruction =
+            `Use today's date from SYSTEM CONTEXT for the date field. ` +
+            `If the caption says "today", you MUST use that date. ` +
+            `Do NOT use image metadata or EXIF dates.`;
+        if (hasPriceKeywords) {
+            return {
+                prompt:
+                    `Analyze this meal image. Identify visible foods and estimate portions. ` +
+                    `[FOOD + EXPENSE LOG INSTRUCTION]\n` +
+                    `The user is logging a food purchase with a stated price. Call BOTH tools:\n` +
+                    `1. log_expense with amount, currency (MYR if "rm"), category "Food", description (food + location).\n` +
+                    `2. log_meal with estimated proteinG, carbsG, fatG, calories for the food.\n` +
+                    `${dateInstruction} ` +
+                    `Do NOT ask the user for macro values. ${caption}`.trim(),
+                useHeavyModel: true,
+            };
+        }
         return {
             prompt:
                 `Analyze this meal image. Identify visible foods and estimate portions. ` +
                 `Call log_meal with description, mealType (if inferable), proteinG, carbsG, fatG, and calories. ` +
+                `${dateInstruction} ` +
                 `All macro values are required and approximate. ${caption}`.trim(),
             useHeavyModel: true,
         };
@@ -323,7 +348,8 @@ bot.on(message('photo'), async (ctx) => {
         const photo = ctx.message.photo[ctx.message.photo.length - 1];
         const imagePart = await getGeminiFilePart(photo.file_id, 'image/jpeg');
         const caption = ctx.message.caption || '';
-        const { prompt, useHeavyModel } = getPhotoPrompt(caption);
+        const { prompt: photoInstruction, useHeavyModel } = getPhotoPrompt(caption);
+        const prompt = buildContextPrompt(caption) + '\n' + photoInstruction;
         const model = useHeavyModel ? heavyModel : defaultModel;
         const chat = model.startChat();
 
@@ -335,6 +361,7 @@ bot.on(message('photo'), async (ctx) => {
             photoFileId: photo.file_id,
             photoBuffer,
             photoMimeType: 'image/jpeg',
+            userCaption: caption,
         };
 
         await runChatTurn(chat, ctx, [imagePart, prompt], ctx.from.id, toolOptions);
