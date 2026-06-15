@@ -294,6 +294,9 @@ async function runChatTurn(
     );
 
     if (functionCalls && functionCalls.length > 0) {
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0737b1'},body:JSON.stringify({sessionId:'0737b1',location:'index.ts:runChatTurn',message:'Gemini tool calls',data:{tools:functionCalls.map(c=>({name:c.name,args:c.args})),isVoice:!!toolOptions?.isVoiceInput},timestamp:Date.now(),hypothesisId:'D,E'})}).catch(()=>{});
+        // #endregion
         let shouldClearSession = true;
         for (const call of functionCalls) {
             const toolResult = await handleToolCall(call, chat, ctx, toolOptions);
@@ -377,11 +380,16 @@ bot.on(message('voice'), async (ctx) => {
         const voice = ctx.message.voice;
         const audioPart = await getGeminiFilePart(voice.file_id, 'audio/ogg');
         const chat = defaultModel.startChat();
+        const voicePrompt = 'Listen to this audio command and execute the appropriate tool.';
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0737b1'},body:JSON.stringify({sessionId:'0737b1',location:'index.ts:voice-handler',message:'Voice received',data:{hasBuildContextPrompt:false,promptSnippet:voicePrompt,serverToday:new Date().toLocaleDateString('en-MY',{timeZone:'Asia/Kuala_Lumpur',year:'numeric',month:'2-digit',day:'2-digit'})},timestamp:Date.now(),hypothesisId:'A,E'})}).catch(()=>{});
+        // #endregion
         await runChatTurn(
             chat,
             ctx,
-            [audioPart, 'Listen to this audio command and execute the appropriate tool.'],
-            ctx.from.id
+            [audioPart, voicePrompt],
+            ctx.from.id,
+            { isVoiceInput: true }
         );
     } catch (error) {
         console.error('Error processing voice:', error);

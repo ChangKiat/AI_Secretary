@@ -32,6 +32,7 @@ export interface ToolCallOptions {
     photoBuffer?: Buffer;
     photoMimeType?: string;
     userCaption?: string;
+    isVoiceInput?: boolean;
 }
 
 function getUserId(ctx: Context): number {
@@ -68,6 +69,10 @@ function resolveLogDate(argsDate: string | undefined, options?: ToolCallOptions)
             return today;
         }
     }
+
+    // #region agent log
+    fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0737b1'},body:JSON.stringify({sessionId:'0737b1',location:'toolHandler.ts:resolveLogDate',message:'resolveLogDate result',data:{argsDate,today,resolved:argsDate,caption,isPhoto,isVoice:!!options?.isVoiceInput,hasCaption:!!caption},timestamp:Date.now(),hypothesisId:'B,C,D'})}).catch(()=>{});
+    // #endregion
 
     return argsDate;
 }
