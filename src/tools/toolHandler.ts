@@ -1,5 +1,6 @@
 import { Context } from 'telegraf';
 import { ChatSession, FunctionCall } from '@google/generative-ai';
+import { resolveCategory } from '../config/expenseCategories';
 import {
     appendExpense,
     getSpendingSummary,
@@ -34,7 +35,6 @@ export interface ToolCallOptions {
     userCaption?: string;
     isVoiceInput?: boolean;
 }
-
 function getUserId(ctx: Context): number {
     return ctx.from!.id;
 }
@@ -62,17 +62,14 @@ function resolveLogDate(argsDate: string | undefined, options?: ToolCallOptions)
     }
 
     const isPhoto = !!(options?.photoBuffer || options?.photoFileId);
-    if (isPhoto && !RECEIPT_CAPTION_KEYWORDS.test(caption)) {
+    const isVoice = !!options?.isVoiceInput;
+    if ((isPhoto || isVoice) && !RECEIPT_CAPTION_KEYWORDS.test(caption)) {
         const argsYear = parseInt(argsDate.slice(0, 4), 10);
         const todayYear = parseInt(today.slice(0, 4), 10);
         if (argsYear < todayYear) {
             return today;
         }
     }
-
-    // #region agent log
-    fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0737b1'},body:JSON.stringify({sessionId:'0737b1',location:'toolHandler.ts:resolveLogDate',message:'resolveLogDate result',data:{argsDate,today,resolved:argsDate,caption,isPhoto,isVoice:!!options?.isVoiceInput,hasCaption:!!caption},timestamp:Date.now(),hypothesisId:'B,C,D'})}).catch(()=>{});
-    // #endregion
 
     return argsDate;
 }
@@ -132,7 +129,7 @@ export async function handleToolCall(
             })
         );
         const currency = args.currency || 'MYR';
-        const category = args.category || 'Fixed Expense';
+        const category = resolveCategory(args.category);
         const description = args.description || `Recurring ${category}`;
 
         await addFixedExpense(

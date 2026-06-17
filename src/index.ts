@@ -1,6 +1,6 @@
 import { Telegraf } from 'telegraf';
 import { message } from 'telegraf/filters';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
 import 'dotenv/config';
 import { appendExpense, getFixedExpensesForToday } from './services/expenseService';
 import { ChatSession } from '@google/generative-ai';
@@ -10,6 +10,7 @@ import {
     GEMINI_MODEL_DEFAULT,
     GEMINI_MODEL_HEAVY,
 } from './config/gemini';
+import { loadExpenseCategories } from './config/expenseCategories';
 import { updateProteinTarget, updateNutritionTargets } from './services/nutritionService';
 import cron from 'node-cron';
 
@@ -30,38 +31,8 @@ const SESSION_TTL_MS = 30 * 60 * 1000;
 
 const userSessions = new Map<number, UserChatState>();
 
-const defaultModel = createGeminiModel(genAI, GEMINI_MODEL_DEFAULT);
-const heavyModel = createGeminiModel(genAI, GEMINI_MODEL_HEAVY);
-
-cron.schedule(
-    '0 9 * * *',
-    async () => {
-        try {
-            const expensesToLog = await getFixedExpensesForToday();
-            if (expensesToLog.length === 0) return;
-
-            console.log(`Found ${expensesToLog.length} fixed expenses for today. Logging...`);
-            let loggedList = '';
-
-            for (const exp of expensesToLog) {
-                await appendExpense(
-                    exp.date,
-                    exp.amount,
-                    exp.currency,
-                    exp.category,
-                    exp.description
-                );
-                loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount})`;
-            }
-
-            const msg = `🗓️ *Automated Billing:* Good morning! I just logged today's scheduled expenses:${loggedList}`;
-            await bot.telegram.sendMessage(MY_CHAT_ID, msg, { parse_mode: 'Markdown' });
-        } catch (error) {
-            console.error('Cron Job Error:', error);
-        }
-    },
-    { timezone: 'Asia/Kuala_Lumpur' }
-);
+let defaultModel: GenerativeModel;
+let heavyModel: GenerativeModel;
 
 bot.catch((err, ctx) => {
     console.error(`🚨 CRITICAL ERROR in ${ctx.updateType} event:`);
@@ -107,10 +78,51 @@ bot.command('settargets', async (ctx) => {
     );
 });
 
-bot.launch(() => {
-    console.log('🤖 Secretary Bot is running...');
-    console.log(`   Default model: ${GEMINI_MODEL_DEFAULT}`);
-    console.log(`   Heavy model:   ${GEMINI_MODEL_HEAVY}`);
+async function main() {
+    await loadExpenseCategories();
+    defaultModel = createGeminiModel(genAI, GEMINI_MODEL_DEFAULT);
+    heavyModel = createGeminiModel(genAI, GEMINI_MODEL_HEAVY);
+
+    cron.schedule(
+        '0 9 * * *',
+        async () => {
+            try {
+                const expensesToLog = await getFixedExpensesForToday();
+                if (expensesToLog.length === 0) return;
+
+                console.log(`Found ${expensesToLog.length} fixed expenses for today. Logging...`);
+                let loggedList = '';
+
+                for (const exp of expensesToLog) {
+                    await appendExpense(
+                        exp.date,
+                        exp.amount,
+                        exp.currency,
+                        exp.category,
+                        exp.description
+                    );
+                    loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount})`;
+                }
+
+                const msg = `🗓️ *Automated Billing:* Good morning! I just logged today's scheduled expenses:${loggedList}`;
+                await bot.telegram.sendMessage(MY_CHAT_ID, msg, { parse_mode: 'Markdown' });
+            } catch (error) {
+                console.error('Cron Job Error:', error);
+            }
+        },
+        { timezone: 'Asia/Kuala_Lumpur' }
+    );
+
+    bot.launch(() => {
+        console.log('🤖 Secretary Bot is running...');
+        console.log(`   Default model: ${GEMINI_MODEL_DEFAULT}`);
+        console.log(`   Heavy model:   ${GEMINI_MODEL_HEAVY}`);
+    });
+}
+
+main().catch((err) => {
+    console.error('Failed to start bot:', err);
+    process.exit(1);
 });
 
 function buildContextPrompt(userMessage: string): string {
@@ -294,9 +306,6 @@ async function runChatTurn(
     );
 
     if (functionCalls && functionCalls.length > 0) {
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0737b1'},body:JSON.stringify({sessionId:'0737b1',location:'index.ts:runChatTurn',message:'Gemini tool calls',data:{tools:functionCalls.map(c=>({name:c.name,args:c.args})),isVoice:!!toolOptions?.isVoiceInput},timestamp:Date.now(),hypothesisId:'D,E'})}).catch(()=>{});
-        // #endregion
         let shouldClearSession = true;
         for (const call of functionCalls) {
             const toolResult = await handleToolCall(call, chat, ctx, toolOptions);
@@ -380,10 +389,10 @@ bot.on(message('voice'), async (ctx) => {
         const voice = ctx.message.voice;
         const audioPart = await getGeminiFilePart(voice.file_id, 'audio/ogg');
         const chat = defaultModel.startChat();
-        const voicePrompt = 'Listen to this audio command and execute the appropriate tool.';
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0737b1'},body:JSON.stringify({sessionId:'0737b1',location:'index.ts:voice-handler',message:'Voice received',data:{hasBuildContextPrompt:false,promptSnippet:voicePrompt,serverToday:new Date().toLocaleDateString('en-MY',{timeZone:'Asia/Kuala_Lumpur',year:'numeric',month:'2-digit',day:'2-digit'})},timestamp:Date.now(),hypothesisId:'A,E'})}).catch(()=>{});
-        // #endregion
+        const voicePrompt =
+            buildContextPrompt('') +
+            '\nListen to this audio command and execute the appropriate tool. ' +
+            `Use today's date from SYSTEM CONTEXT when logging meals or expenses unless the user specifies another date.`;
         await runChatTurn(
             chat,
             ctx,

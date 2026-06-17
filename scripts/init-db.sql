@@ -4,18 +4,31 @@ CREATE TABLE IF NOT EXISTS expenses (
     date TEXT NOT NULL,
     amount NUMERIC(12, 2) NOT NULL,
     currency TEXT NOT NULL DEFAULT 'MYR',
-    category TEXT NOT NULL DEFAULT 'General',
+    category TEXT NOT NULL DEFAULT 'Other',
     description TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Budgets table (optional, avoids repeating budget on every row)
+-- Per-category monthly budgets (keep seed in sync with DEFAULT_EXPENSE_CATEGORIES in src/config/expenseCategories.ts)
 CREATE TABLE IF NOT EXISTS budgets (
     id SERIAL PRIMARY KEY,
-    month TEXT NOT NULL UNIQUE,  -- e.g. "2024-01"
-    amount NUMERIC(12, 2) NOT NULL,
+    category TEXT NOT NULL UNIQUE,
+    monthly_budget NUMERIC(12, 2) NOT NULL,
     currency TEXT NOT NULL DEFAULT 'MYR'
 );
+
+INSERT INTO budgets (category, monthly_budget) VALUES
+    ('Drink', 200),
+    ('Entertainment', 300),
+    ('Food', 800),
+    ('Shopping', 500),
+    ('Transport', 370),
+    ('Loan', 1000),
+    ('Investment', 1000),
+    ('Insurance', 1000),
+    ('Utility', 1000),
+    ('Other', 1000)
+ON CONFLICT (category) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS fixed_expenses (
     id SERIAL PRIMARY KEY,
@@ -23,7 +36,7 @@ CREATE TABLE IF NOT EXISTS fixed_expenses (
     amount NUMERIC(12, 2) NOT NULL,
     frequency_months INTEGER NOT NULL DEFAULT 1,
     currency TEXT NOT NULL DEFAULT 'MYR',
-    category TEXT NOT NULL DEFAULT 'Fixed Expense',
+    category TEXT NOT NULL DEFAULT 'Other',
     description TEXT NOT NULL,
     start_month INTEGER NOT NULL,
     active BOOLEAN NOT NULL DEFAULT TRUE,

@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { expenses, fixedExpenses } from '../db/schema';
+import { getExpenseCategories, resolveCategory } from '../config/expenseCategories';
 
 function todayInKL(): Date {
     return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
@@ -15,6 +16,66 @@ function formatDateForDb(date?: string): string {
     return `${y}-${m}-${d}`;
 }
 
+function resolveBudgetPeriod(startDate?: string, endDate?: string): {
+    periodStart: string;
+    periodEnd: string;
+    singleMonth: boolean;
+    budgetNote?: string;
+} {
+    const today = formatDateForDb();
+
+    if (!startDate && !endDate) {
+        const monthStart = `${today.slice(0, 7)}-01`;
+        return { periodStart: monthStart, periodEnd: today, singleMonth: true };
+    }
+
+    const effectiveStart = startDate || endDate!;
+    const effectiveEnd = endDate || startDate!;
+    const startMonth = effectiveStart.slice(0, 7);
+    const endMonth = effectiveEnd.slice(0, 7);
+
+    if (startMonth !== endMonth) {
+        return {
+            periodStart: effectiveStart,
+            periodEnd: effectiveEnd,
+            singleMonth: false,
+            budgetNote:
+                'Budgets are monthly; use a single-month range for budget comparison.',
+        };
+    }
+
+    return {
+        periodStart: effectiveStart,
+        periodEnd: effectiveEnd,
+        singleMonth: true,
+    };
+}
+
+function rowMatchesFilters(
+    row: { category: string; description: string; date: string },
+    filters: {
+        resolvedCategory?: string;
+        description?: string;
+        startDate: string;
+        endDate: string;
+    }
+): boolean {
+    const canonicalCategory = resolveCategory(row.category);
+    if (filters.resolvedCategory && canonicalCategory !== filters.resolvedCategory) {
+        return false;
+    }
+    if (
+        filters.description &&
+        !row.description.toLowerCase().includes(filters.description.toLowerCase())
+    ) {
+        return false;
+    }
+    if (row.date < filters.startDate || row.date > filters.endDate) {
+        return false;
+    }
+    return true;
+}
+
 export async function appendExpense(
     date: string | undefined,
     amount: number,
@@ -27,7 +88,7 @@ export async function appendExpense(
         date: formatDateForDb(date),
         amount: String(amount),
         currency: currency || 'MYR',
-        category: category || 'General',
+        category: resolveCategory(category),
         description,
     });
     return true;
@@ -41,28 +102,65 @@ export async function getSpendingSummary(
 ) {
     const db = requireDb();
     const rows = await db.select().from(expenses);
+    const budgetPeriod = resolveBudgetPeriod(startDate, endDate);
+
+    const effectiveStart = startDate ?? budgetPeriod.periodStart;
+    const effectiveEnd = endDate ?? budgetPeriod.periodEnd;
+    const resolvedFilterCategory = category ? resolveCategory(category) : undefined;
 
     let totalSpent = 0;
     const breakdown: Record<string, number> = {};
+    const budgetSpent: Record<string, number> = {};
 
     for (const row of rows) {
-        const rowCategory = row.category.toLowerCase();
-        const rowDescription = row.description.toLowerCase();
-        let match = true;
+        const canonicalCategory = resolveCategory(row.category);
+        const summaryFilters = {
+            resolvedCategory: resolvedFilterCategory,
+            description,
+            startDate: effectiveStart,
+            endDate: effectiveEnd,
+        };
 
-        if (category && rowCategory !== category.toLowerCase()) match = false;
-        if (description && !rowDescription.includes(description.toLowerCase())) match = false;
-        if (startDate && row.date < startDate) match = false;
-        if (endDate && row.date > endDate) match = false;
-
-        if (match) {
+        if (rowMatchesFilters(row, summaryFilters)) {
             const amount = parseFloat(row.amount);
             totalSpent += amount;
-            breakdown[rowCategory] = (breakdown[rowCategory] || 0) + amount;
+            breakdown[canonicalCategory] = (breakdown[canonicalCategory] || 0) + amount;
+        }
+
+        if (budgetPeriod.singleMonth) {
+            const budgetFilters = {
+                resolvedCategory: resolvedFilterCategory,
+                description,
+                startDate: budgetPeriod.periodStart,
+                endDate: budgetPeriod.periodEnd,
+            };
+            if (rowMatchesFilters(row, budgetFilters)) {
+                const amount = parseFloat(row.amount);
+                budgetSpent[canonicalCategory] = (budgetSpent[canonicalCategory] || 0) + amount;
+            }
         }
     }
 
-    return { total: totalSpent, breakdown };
+    const budgetStatus = budgetPeriod.singleMonth
+        ? getExpenseCategories().map(({ category: cat, monthlyBudget }) => {
+              const spent = budgetSpent[cat] || 0;
+              return {
+                  category: cat,
+                  spent,
+                  budget: monthlyBudget,
+                  remaining: monthlyBudget - spent,
+                  percentUsed: Math.round((spent / monthlyBudget) * 100),
+              };
+          })
+        : [];
+
+    return {
+        total: totalSpent,
+        breakdown,
+        budgetStatus,
+        period: { startDate: budgetPeriod.periodStart, endDate: budgetPeriod.periodEnd },
+        ...(budgetPeriod.budgetNote ? { budgetNote: budgetPeriod.budgetNote } : {}),
+    };
 }
 
 export async function addFixedExpense(
@@ -79,7 +177,7 @@ export async function addFixedExpense(
         dayOfMonth,
         amount: String(amount),
         currency: currency || 'MYR',
-        category: category || 'Fixed Expense',
+        category: resolveCategory(category),
         description,
         frequencyMonths: frequency,
         startMonth,
@@ -113,7 +211,7 @@ export async function getFixedExpensesForToday(): Promise<
         date: dateStr,
         amount: parseFloat(row.amount),
         currency: row.currency,
-        category: row.category,
+        category: resolveCategory(row.category),
         description: row.description,
     }));
 }
@@ -197,7 +295,7 @@ export async function updateExpense(
     if (fields.date != null) set.date = fields.date;
     if (fields.amount != null) set.amount = String(fields.amount);
     if (fields.currency != null) set.currency = fields.currency;
-    if (fields.category != null) set.category = fields.category;
+    if (fields.category != null) set.category = resolveCategory(fields.category);
     if (fields.description != null) set.description = fields.description;
 
     if (Object.keys(set).length === 0) return false;
@@ -222,7 +320,7 @@ export async function getActiveFixedExpenses() {
     return rows.map((row) => ({
         id: row.id,
         description: row.description,
-        category: row.category,
+        category: resolveCategory(row.category),
         amount: parseFloat(row.amount),
         dayOfMonth: row.dayOfMonth,
         frequencyMonths: row.frequencyMonths,
@@ -245,7 +343,7 @@ export async function updateFixedExpenseById(
     const set: Record<string, string | number> = {};
 
     if (fields.description != null) set.description = fields.description;
-    if (fields.category != null) set.category = fields.category;
+    if (fields.category != null) set.category = resolveCategory(fields.category);
     if (fields.amount != null) set.amount = String(fields.amount);
     if (fields.dayOfMonth != null) set.dayOfMonth = fields.dayOfMonth;
     if (fields.frequencyMonths != null) set.frequencyMonths = fields.frequencyMonths;
@@ -283,7 +381,7 @@ export async function logBulkExpenses(expenseList: {
             date: formatDateForDb(exp.date),
             amount: String(exp.amount),
             currency: exp.currency || 'MYR',
-            category: exp.category || 'General',
+            category: resolveCategory(exp.category),
             description: exp.description,
         }))
     );

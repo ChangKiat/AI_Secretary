@@ -5,9 +5,16 @@ export const expenses = pgTable('expenses', {
     date: text('date').notNull(),
     amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
     currency: text('currency').default('MYR').notNull(),
-    category: text('category').default('General').notNull(),
+    category: text('category').default('Other').notNull(),
     description: text('description').notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const budgets = pgTable('budgets', {
+    id: serial('id').primaryKey(),
+    category: text('category').notNull().unique(),
+    monthlyBudget: numeric('monthly_budget', { precision: 12, scale: 2 }).notNull(),
+    currency: text('currency').default('MYR').notNull(),
 });
 
 export const fixedExpenses = pgTable('fixed_expenses', {
@@ -16,7 +23,7 @@ export const fixedExpenses = pgTable('fixed_expenses', {
     amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
     frequencyMonths: integer('frequency_months').default(1).notNull(),
     currency: text('currency').default('MYR').notNull(),
-    category: text('category').default('Fixed Expense').notNull(),
+    category: text('category').default('Other').notNull(),
     description: text('description').notNull(),
     startMonth: integer('start_month').notNull(),
     active: boolean('active').default(true).notNull(),

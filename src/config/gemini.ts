@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
-import { SYSTEM_INSTRUCTION } from './config';
-import { allFunctionDeclarations } from '../tools/tools';
+import { buildSystemInstruction } from './config';
+import { getExpenseCategoryNames } from './expenseCategories';
+import { getAllFunctionDeclarations } from '../tools/tools';
 
 export const GEMINI_MODEL_DEFAULT =
     process.env.GEMINI_MODEL_DEFAULT || 'gemini-2.5-flash-lite';
@@ -11,13 +12,14 @@ export function createGeminiModel(
     genAI: GoogleGenerativeAI,
     modelName: string
 ): GenerativeModel {
+    const categoryNames = getExpenseCategoryNames();
     return genAI.getGenerativeModel({
         model: modelName,
         generationConfig: {
             maxOutputTokens: 2048,
             temperature: 0.1,
         },
-        tools: [{ functionDeclarations: allFunctionDeclarations }],
-        systemInstruction: SYSTEM_INSTRUCTION,
+        tools: [{ functionDeclarations: getAllFunctionDeclarations() }],
+        systemInstruction: buildSystemInstruction(categoryNames),
     });
 }
