@@ -15,7 +15,9 @@ import {
     logWorkout,
     getWorkoutHistory,
     getRecentWorkoutsForSuggestion,
+    getWorkoutBurnSummary,
 } from '../services/gymService';
+import { estimateBurn } from '../services/burnCalculator';
 import {
     logMeal,
     getNutritionSummary,
@@ -24,6 +26,11 @@ import {
     updateNutritionTargets,
     uploadMealPhoto,
     formatMealLogReply,
+    getMealHistory,
+    updateMeal,
+    deleteMeal,
+    getMealById,
+    getNutritionTargets,
 } from '../services/nutritionService';
 
 export type ToolCallResult = 'complete' | 'awaiting_input';
@@ -279,6 +286,16 @@ export async function handleToolCall(
             notes?: string;
         };
         const date = args.date || todayISO();
+        const settings = await getNutritionTargets(userId);
+        const burn = estimateBurn(
+            args.exercise,
+            args.durationMin,
+            args.sets,
+            args.reps,
+            args.weightKg,
+            settings.bodyWeightKg
+        );
+
         await logWorkout(
             userId,
             date,
@@ -287,10 +304,22 @@ export async function handleToolCall(
             args.reps,
             args.weightKg,
             args.durationMin,
-            args.notes
+            args.notes,
+            burn?.caloriesBurned ?? null,
+            burn?.fatBurnG ?? null
         );
         await chat.sendMessage([
-            { functionResponse: { name: 'log_workout', response: { status: 'success' } } },
+            {
+                functionResponse: {
+                    name: 'log_workout',
+                    response: {
+                        status: 'success',
+                        caloriesBurned: burn?.caloriesBurned ?? null,
+                        fatBurnG: burn?.fatBurnG ?? null,
+                        bodyWeightKg: settings.bodyWeightKg,
+                    },
+                },
+            },
         ]);
         const detail = [
             args.sets && args.reps ? `${args.sets}x${args.reps}` : args.sets ? `${args.sets} sets` : null,
@@ -303,9 +332,21 @@ export async function handleToolCall(
         ]
             .filter(Boolean)
             .join(' @ ');
-        await ctx.reply(
-            `💪 Logged ${args.exercise}${detail ? ` (${detail})` : ''} on ${date}.`
-        );
+        let reply = `💪 Logged ${args.exercise}${detail ? ` (${detail})` : ''} on ${date}.`;
+        if (burn) {
+            reply += `\n~${burn.caloriesBurned} cal burned · ~${burn.fatBurnG}g fat (approx.)`;
+        } else {
+            reply += `\nSet your body weight (e.g. "I weigh 70kg") for calorie burn estimates.`;
+        }
+        await ctx.reply(reply);
+        return 'complete';
+    } else if (call.name === 'get_workout_summary') {
+        const args = call.args as { startDate: string; endDate: string };
+        const summary = await getWorkoutBurnSummary(userId, args.startDate, args.endDate);
+        const toolResult = await chat.sendMessage([
+            { functionResponse: { name: 'get_workout_summary', response: summary } },
+        ]);
+        await ctx.reply(toolResult.response.text());
         return 'complete';
     } else if (call.name === 'get_workout_history') {
         const args = call.args as { startDate?: string; endDate?: string; exercise?: string };
@@ -357,7 +398,7 @@ export async function handleToolCall(
             photoPath = options.photoFileId;
         }
 
-        await logMeal(
+        const mealId = await logMeal(
             userId,
             date,
             args.description,
@@ -371,6 +412,7 @@ export async function handleToolCall(
 
         const { progress } = await getTodayMacroProgress(userId, date);
         const meal = {
+            id: mealId,
             description: args.description,
             mealType: args.mealType,
             proteinG: args.proteinG,
@@ -383,11 +425,106 @@ export async function handleToolCall(
             {
                 functionResponse: {
                     name: 'log_meal',
-                    response: { status: 'success', meal, todayProgress: progress },
+                    response: { status: 'success', mealId, meal, todayProgress: progress },
                 },
             },
         ]);
-        await ctx.reply(formatMealLogReply(meal, date, progress));
+        await ctx.reply(formatMealLogReply(meal, date, progress, mealId));
+        return 'complete';
+    } else if (call.name === 'get_meal_history') {
+        const args = call.args as { startDate: string; endDate: string };
+        const history = await getMealHistory(userId, args.startDate, args.endDate);
+        const toolResult = await chat.sendMessage([
+            { functionResponse: { name: 'get_meal_history', response: { meals: history } } },
+        ]);
+        await ctx.reply(toolResult.response.text());
+        return 'complete';
+    } else if (call.name === 'edit_meal') {
+        const args = call.args as {
+            id: number;
+            description: string;
+            mealType?: string;
+            proteinG: number;
+            carbsG: number;
+            fatG: number;
+            calories: number;
+        };
+        const existing = await getMealById(args.id, userId);
+        if (!existing) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'edit_meal', response: { status: 'not_found' } } },
+            ]);
+            await ctx.reply(`⚠️ Could not find meal #${args.id} to update.`);
+            return 'complete';
+        }
+
+        const updated = await updateMeal(args.id, userId, {
+            description: args.description,
+            mealType: args.mealType,
+            proteinG: args.proteinG,
+            carbsG: args.carbsG,
+            fatG: args.fatG,
+            calories: args.calories,
+        });
+
+        if (!updated) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'edit_meal', response: { status: 'failed' } } },
+            ]);
+            await ctx.reply(`⚠️ Failed to update meal #${args.id}.`);
+            return 'complete';
+        }
+
+        const date = existing.date;
+        const { progress } = await getTodayMacroProgress(userId, date);
+        const meal = {
+            description: args.description,
+            mealType: args.mealType,
+            proteinG: args.proteinG,
+            carbsG: args.carbsG,
+            fatG: args.fatG,
+            calories: args.calories,
+        };
+
+        await chat.sendMessage([
+            {
+                functionResponse: {
+                    name: 'edit_meal',
+                    response: { status: 'success', mealId: args.id, meal, todayProgress: progress },
+                },
+            },
+        ]);
+        await ctx.reply(
+            `✅ Updated meal #${args.id}:\n` + formatMealLogReply(meal, date, progress, args.id)
+        );
+        return 'complete';
+    } else if (call.name === 'delete_meal') {
+        const args = call.args as { id: number };
+        const deleted = await deleteMeal(args.id, userId);
+
+        if (!deleted) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'delete_meal', response: { status: 'not_found' } } },
+            ]);
+            await ctx.reply(`⚠️ Could not find meal #${args.id} to delete.`);
+            return 'complete';
+        }
+
+        const date = todayISO();
+        const { progress } = await getTodayMacroProgress(userId, date);
+        await chat.sendMessage([
+            {
+                functionResponse: {
+                    name: 'delete_meal',
+                    response: { status: 'success', mealId: args.id, todayProgress: progress },
+                },
+            },
+        ]);
+        await ctx.reply(
+            `🗑️ Deleted meal #${args.id}.\n` +
+                `Today: ${progress.calories.consumed}/${progress.calories.target} cal · ` +
+                `Protein ${progress.protein.consumed}/${progress.protein.target}g`
+        );
         return 'complete';
     } else if (call.name === 'get_nutrition_summary') {
         const args = call.args as { startDate: string; endDate: string };
@@ -412,12 +549,14 @@ export async function handleToolCall(
             dailyCalorieTarget?: number;
             dailyCarbsTargetG?: number;
             dailyFatTargetG?: number;
+            bodyWeightKg?: number;
         };
         await updateNutritionTargets(userId, {
             dailyProteinTargetG: args.dailyProteinTargetG,
             dailyCalorieTarget: args.dailyCalorieTarget,
             dailyCarbsTargetG: args.dailyCarbsTargetG,
             dailyFatTargetG: args.dailyFatTargetG,
+            bodyWeightKg: args.bodyWeightKg,
         });
         await chat.sendMessage([
             { functionResponse: { name: 'update_user_settings', response: { status: 'success' } } },
@@ -428,10 +567,11 @@ export async function handleToolCall(
         if (args.dailyProteinTargetG) parts.push(`${args.dailyProteinTargetG}g protein`);
         if (args.dailyCarbsTargetG) parts.push(`${args.dailyCarbsTargetG}g carbs`);
         if (args.dailyFatTargetG) parts.push(`${args.dailyFatTargetG}g fat`);
+        if (args.bodyWeightKg) parts.push(`${args.bodyWeightKg}kg body weight`);
 
         await ctx.reply(
             parts.length > 0
-                ? `✅ Daily targets updated: ${parts.join(', ')}.`
+                ? `✅ Settings updated: ${parts.join(', ')}.`
                 : `✅ Settings updated.`
         );
         return 'complete';

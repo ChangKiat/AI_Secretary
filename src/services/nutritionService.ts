@@ -18,6 +18,7 @@ export interface NutritionTargets {
     dailyCarbsTargetG: number;
     dailyFatTargetG: number;
     timezone: string;
+    bodyWeightKg: number | null;
 }
 
 export interface DayMacros {
@@ -44,6 +45,7 @@ function parseSettingsRow(row: typeof userSettings.$inferSelect): NutritionTarge
         dailyCarbsTargetG: parseFloat(row.dailyCarbsTargetG),
         dailyFatTargetG: parseFloat(row.dailyFatTargetG),
         timezone: row.timezone,
+        bodyWeightKg: row.bodyWeightKg ? parseFloat(row.bodyWeightKg) : null,
     };
 }
 
@@ -80,6 +82,7 @@ export async function getOrCreateUserSettings(telegramUserId: number): Promise<N
         dailyCarbsTargetG: DEFAULT_CARBS_TARGET,
         dailyFatTargetG: DEFAULT_FAT_TARGET,
         timezone: 'Asia/Kuala_Lumpur',
+        bodyWeightKg: null,
     };
 }
 
@@ -96,14 +99,18 @@ export async function updateNutritionTargets(
     targets: Partial<
         Pick<
             NutritionTargets,
-            'dailyProteinTargetG' | 'dailyCalorieTarget' | 'dailyCarbsTargetG' | 'dailyFatTargetG'
+            | 'dailyProteinTargetG'
+            | 'dailyCalorieTarget'
+            | 'dailyCarbsTargetG'
+            | 'dailyFatTargetG'
+            | 'bodyWeightKg'
         >
     >
 ) {
     const db = requireDb();
     await getOrCreateUserSettings(telegramUserId);
 
-    const set: Record<string, string> = {};
+    const set: Record<string, string | null> = {};
     if (targets.dailyProteinTargetG != null) {
         set.dailyProteinTargetG = String(targets.dailyProteinTargetG);
     }
@@ -115,6 +122,10 @@ export async function updateNutritionTargets(
     }
     if (targets.dailyFatTargetG != null) {
         set.dailyFatTargetG = String(targets.dailyFatTargetG);
+    }
+    if (targets.bodyWeightKg !== undefined) {
+        set.bodyWeightKg =
+            targets.bodyWeightKg != null ? String(targets.bodyWeightKg) : null;
     }
 
     if (Object.keys(set).length > 0) {
@@ -159,19 +170,23 @@ export async function logMeal(
     fatG?: number,
     calories?: number,
     photoPath?: string
-) {
+): Promise<number> {
     const db = requireDb();
-    await db.insert(meals).values({
-        telegramUserId,
-        date,
-        mealType: mealType ?? null,
-        description,
-        proteinG: String(proteinG),
-        carbsG: carbsG != null ? String(carbsG) : null,
-        fatG: fatG != null ? String(fatG) : null,
-        calories: calories != null ? String(calories) : null,
-        photoPath: photoPath ?? null,
-    });
+    const [row] = await db
+        .insert(meals)
+        .values({
+            telegramUserId,
+            date,
+            mealType: mealType ?? null,
+            description,
+            proteinG: String(proteinG),
+            carbsG: carbsG != null ? String(carbsG) : null,
+            fatG: fatG != null ? String(fatG) : null,
+            calories: calories != null ? String(calories) : null,
+            photoPath: photoPath ?? null,
+        })
+        .returning({ id: meals.id });
+    return row.id;
 }
 
 function emptyDayMacros(): DayMacros {
@@ -298,7 +313,12 @@ export async function getTodayMacroProgress(telegramUserId: number, date: string
     };
 }
 
-export function formatMealLogReply(meal: MealLogInput, date: string, todayProgress: ReturnType<typeof buildDayProgress>) {
+export function formatMealLogReply(
+    meal: MealLogInput,
+    date: string,
+    todayProgress: ReturnType<typeof buildDayProgress>,
+    mealId?: number
+) {
     const mealLine = meal.mealType
         ? `${meal.description} (${meal.mealType})`
         : meal.description;
@@ -308,8 +328,9 @@ export function formatMealLogReply(meal: MealLogInput, date: string, todayProgre
     const cal = Math.round(meal.calories);
 
     const t = todayProgress;
+    const idLine = mealId != null ? ` (#${mealId})` : '';
     return (
-        `🍽️ ${mealLine}\n` +
+        `🍽️ ${mealLine}${idLine}\n` +
         `Cal ${cal} · Protein ${p}g · Carbs ${c}g · Fat ${f}g\n` +
         `Today: ${t.calories.consumed}/${t.calories.target} cal · ` +
         `Protein ${t.protein.consumed}/${t.protein.target}g · ` +
@@ -317,6 +338,29 @@ export function formatMealLogReply(meal: MealLogInput, date: string, todayProgre
         `Fat ${t.fat.consumed}/${t.fat.target}g\n` +
         `(approximate estimates)`
     );
+}
+
+export async function getMealById(id: number, telegramUserId: number) {
+    const db = requireDb();
+    const rows = await db
+        .select()
+        .from(meals)
+        .where(and(eq(meals.id, id), eq(meals.telegramUserId, telegramUserId)))
+        .limit(1);
+
+    if (rows.length === 0) return null;
+
+    const row = rows[0];
+    return {
+        id: row.id,
+        date: row.date,
+        mealType: row.mealType,
+        description: row.description,
+        proteinG: parseFloat(row.proteinG),
+        carbsG: row.carbsG ? parseFloat(row.carbsG) : null,
+        fatG: row.fatG ? parseFloat(row.fatG) : null,
+        calories: row.calories ? parseFloat(row.calories) : null,
+    };
 }
 
 export async function getMealHistory(

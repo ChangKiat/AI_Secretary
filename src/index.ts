@@ -148,7 +148,7 @@ function buildContextPrompt(userMessage: string): string {
 const GYM_KEYWORDS =
     /\b(gym|workout|exercise|bench|squat|deadlift|training|leg day|push day|pull day)\b/;
 const FOOD_KEYWORDS =
-    /\b(food|meal|protein|lunch|dinner|breakfast|snack|nutrition|macro|calories|eat|ate|eating|had|drank|drink|roti|nasi|mee|rice|kuih|teh|kopi|ayam|ikan|sambal|burger|pizza|sandwich|egg|toast|oats|salad|fruit)\b/;
+    /\b(food|meal|protein|lunch|dinner|breakfast|snack|nutrition|macro|calories|eat|ate|eating|had|drank|drink|roti|nasi|mee|rice|kuih|teh|kopi|ayam|ikan|sambal|burger|pizza|sandwich|egg|toast|oats|salad|fruit|pork|daging|wrong|actually|correct|fix|delete meal)\b/;
 
 const NUTRITION_QUERY_KEYWORDS =
     /\b(how much|how am i|summary|remaining|target|progress|total)\b.*\b(protein|calories|carbs|fat|macro|nutrition)\b|\b(protein|calories|carbs|fat|macro|nutrition)\b.*\b(today|remaining|target|progress|total|summary)\b/;

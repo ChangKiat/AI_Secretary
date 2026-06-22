@@ -40,6 +40,8 @@ export const workouts = pgTable('workouts', {
     weightKg: numeric('weight_kg', { precision: 8, scale: 2 }),
     durationMin: numeric('duration_min', { precision: 8, scale: 2 }),
     notes: text('notes'),
+    caloriesBurned: numeric('calories_burned', { precision: 8, scale: 2 }),
+    fatBurnedG: numeric('fat_burned_g', { precision: 8, scale: 2 }),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -64,4 +66,6 @@ export const userSettings = pgTable('user_settings', {
     dailyCarbsTargetG: numeric('daily_carbs_target_g', { precision: 8, scale: 2 }).default('250').notNull(),
     dailyFatTargetG: numeric('daily_fat_target_g', { precision: 8, scale: 2 }).default('70').notNull(),
     timezone: text('timezone').default('Asia/Kuala_Lumpur').notNull(),
+    salaryAfterTax: numeric('salary_after_tax', { precision: 12, scale: 2 }).default('0').notNull(),
+    bodyWeightKg: numeric('body_weight_kg', { precision: 6, scale: 2 }),
 });

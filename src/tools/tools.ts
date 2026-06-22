@@ -274,9 +274,68 @@ export const suggestMealDeclaration: FunctionDeclaration = {
     },
 };
 
+export const getMealHistoryDeclaration: FunctionDeclaration = {
+    name: 'get_meal_history',
+    description:
+        'Lists logged meals with ids for a date range. Use before edit_meal or delete_meal when the user corrects or removes a meal.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            startDate: { type: SchemaType.STRING, description: 'YYYY-MM-DD' },
+            endDate: { type: SchemaType.STRING, description: 'YYYY-MM-DD' },
+        },
+        required: ['startDate', 'endDate'],
+    },
+};
+
+export const editMealDeclaration: FunctionDeclaration = {
+    name: 'edit_meal',
+    description:
+        'Updates an existing meal by id. Use when the user corrects food identification (e.g. chicken → pork) or macro estimates. Re-estimate all macros for the corrected food and portion.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            id: { type: SchemaType.NUMBER, description: 'Meal id from get_meal_history or log_meal response.' },
+            description: { type: SchemaType.STRING, description: 'Corrected food description.' },
+            mealType: { type: SchemaType.STRING, description: 'breakfast, lunch, dinner, snack.' },
+            proteinG: { type: SchemaType.NUMBER, description: 'Re-estimated protein in grams.' },
+            carbsG: { type: SchemaType.NUMBER, description: 'Re-estimated carbs in grams.' },
+            fatG: { type: SchemaType.NUMBER, description: 'Re-estimated fat in grams.' },
+            calories: { type: SchemaType.NUMBER, description: 'Re-estimated calories.' },
+        },
+        required: ['id', 'description', 'proteinG', 'carbsG', 'fatG', 'calories'],
+    },
+};
+
+export const deleteMealDeclaration: FunctionDeclaration = {
+    name: 'delete_meal',
+    description: 'Deletes a logged meal by id. Use when the user wants to remove a wrong entry entirely.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            id: { type: SchemaType.NUMBER, description: 'Meal id from get_meal_history.' },
+        },
+        required: ['id'],
+    },
+};
+
+export const getWorkoutSummaryDeclaration: FunctionDeclaration = {
+    name: 'get_workout_summary',
+    description:
+        'Gets workout sessions and total calories/fat burned for a date range. Use for "how many calories did I burn today" questions.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            startDate: { type: SchemaType.STRING, description: 'YYYY-MM-DD' },
+            endDate: { type: SchemaType.STRING, description: 'YYYY-MM-DD' },
+        },
+        required: ['startDate', 'endDate'],
+    },
+};
+
 export const updateUserSettingsDeclaration: FunctionDeclaration = {
     name: 'update_user_settings',
-    description: 'Updates daily nutrition targets (calories, protein, carbs, fat in grams).',
+    description: 'Updates daily nutrition targets and/or body weight for calorie burn estimates.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -284,6 +343,7 @@ export const updateUserSettingsDeclaration: FunctionDeclaration = {
             dailyCalorieTarget: { type: SchemaType.NUMBER, description: 'Daily calorie goal.' },
             dailyCarbsTargetG: { type: SchemaType.NUMBER, description: 'Daily carbs goal in grams.' },
             dailyFatTargetG: { type: SchemaType.NUMBER, description: 'Daily fat goal in grams.' },
+            bodyWeightKg: { type: SchemaType.NUMBER, description: 'User body weight in kg for workout burn calculations.' },
         },
     },
 };
@@ -303,8 +363,12 @@ export function getAllFunctionDeclarations(): FunctionDeclaration[] {
         getWorkoutHistoryDeclaration,
         suggestWorkoutDeclaration,
         logMealDeclaration,
+        getMealHistoryDeclaration,
+        editMealDeclaration,
+        deleteMealDeclaration,
         getNutritionSummaryDeclaration,
         suggestMealDeclaration,
         updateUserSettingsDeclaration,
+        getWorkoutSummaryDeclaration,
     ];
 }

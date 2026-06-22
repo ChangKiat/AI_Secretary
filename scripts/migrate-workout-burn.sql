@@ -1,0 +1,3 @@
+ALTER TABLE workouts ADD COLUMN IF NOT EXISTS calories_burned NUMERIC(8, 2);
+ALTER TABLE workouts ADD COLUMN IF NOT EXISTS fat_burned_g NUMERIC(8, 2);
+ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS body_weight_kg NUMERIC(6, 2);

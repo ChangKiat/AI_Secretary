@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS workouts (
     weight_kg NUMERIC(8, 2),
     duration_min NUMERIC(8, 2),
     notes TEXT,
+    calories_burned NUMERIC(8, 2),
+    fat_burned_g NUMERIC(8, 2),
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -76,5 +78,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     daily_calorie_target NUMERIC(8, 2) NOT NULL DEFAULT 2200,
     daily_carbs_target_g NUMERIC(8, 2) NOT NULL DEFAULT 250,
     daily_fat_target_g NUMERIC(8, 2) NOT NULL DEFAULT 70,
-    timezone TEXT NOT NULL DEFAULT 'Asia/Kuala_Lumpur'
+    timezone TEXT NOT NULL DEFAULT 'Asia/Kuala_Lumpur',
+    salary_after_tax NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    body_weight_kg NUMERIC(6, 2)
 );

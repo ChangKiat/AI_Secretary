@@ -10,7 +10,9 @@ export async function logWorkout(
     reps?: number,
     weightKg?: number,
     durationMin?: number,
-    notes?: string
+    notes?: string,
+    caloriesBurned?: number | null,
+    fatBurnG?: number | null
 ) {
     const db = requireDb();
     const row = {
@@ -22,6 +24,8 @@ export async function logWorkout(
         weightKg: weightKg != null ? String(weightKg) : null,
         durationMin: durationMin != null ? String(durationMin) : null,
         notes: notes ?? null,
+        caloriesBurned: caloriesBurned != null ? String(caloriesBurned) : null,
+        fatBurnedG: fatBurnG != null ? String(fatBurnG) : null,
     };
     await db.insert(workouts).values(row);
 }
@@ -56,7 +60,41 @@ export async function getWorkoutHistory(
             weightKg: row.weightKg ? parseFloat(row.weightKg) : null,
             durationMin: row.durationMin ? parseFloat(row.durationMin) : null,
             notes: row.notes,
+            caloriesBurned: row.caloriesBurned ? parseFloat(row.caloriesBurned) : null,
+            fatBurnG: row.fatBurnedG ? parseFloat(row.fatBurnedG) : null,
         }));
+}
+
+export async function getWorkoutBurnSummary(
+    telegramUserId: number,
+    startDate: string,
+    endDate: string
+) {
+    const sessions = await getWorkoutHistory(telegramUserId, startDate, endDate);
+
+    let totalCaloriesBurned = 0;
+    let totalFatBurnG = 0;
+    let sessionsWithBurn = 0;
+
+    for (const session of sessions) {
+        if (session.caloriesBurned != null) {
+            totalCaloriesBurned += session.caloriesBurned;
+            sessionsWithBurn++;
+        }
+        if (session.fatBurnG != null) {
+            totalFatBurnG += session.fatBurnG;
+        }
+    }
+
+    return {
+        startDate,
+        endDate,
+        sessions,
+        sessionCount: sessions.length,
+        sessionsWithBurn,
+        totalCaloriesBurned: Math.round(totalCaloriesBurned),
+        totalFatBurnG: Math.round(totalFatBurnG * 10) / 10,
+    };
 }
 
 export async function updateWorkout(
@@ -70,6 +108,8 @@ export async function updateWorkout(
         weightKg?: number | null;
         durationMin?: number | null;
         notes?: string | null;
+        caloriesBurned?: number | null;
+        fatBurnG?: number | null;
     }
 ): Promise<boolean> {
     const db = requireDb();
@@ -86,6 +126,13 @@ export async function updateWorkout(
         set.durationMin = fields.durationMin != null ? String(fields.durationMin) : null;
     }
     if (fields.notes !== undefined) set.notes = fields.notes;
+    if (fields.caloriesBurned !== undefined) {
+        set.caloriesBurned =
+            fields.caloriesBurned != null ? String(fields.caloriesBurned) : null;
+    }
+    if (fields.fatBurnG !== undefined) {
+        set.fatBurnedG = fields.fatBurnG != null ? String(fields.fatBurnG) : null;
+    }
 
     if (Object.keys(set).length === 0) return false;
 
