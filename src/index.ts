@@ -186,16 +186,12 @@ function getTextFoodPrompt(userMessage: string): string {
 const RECEIPT_KEYWORDS =
     /\b(receipt|bill|invoice|statement|expense|transaction|bank|credit card)\b/;
 
-function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boolean; branch: string } {
+function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boolean } {
     const lower = caption.toLowerCase();
     const hasPriceKeywords = EXPENSE_PRICE_KEYWORDS.test(caption);
     const isTodayMeal = /\btoday\b/i.test(caption);
     if (GYM_KEYWORDS.test(lower)) {
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:getPhotoPrompt',message:'photo branch',data:{branch:'gym_keywords',caption},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         return {
-            branch: 'gym_keywords',
             prompt:
                 `You are a gym assistant. Analyze this workout image and MUST call log_workout ` +
                 `with exercise, sets, reps, weightKg, and durationMin from what you see. ` +
@@ -213,11 +209,7 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
             `If the caption says "today", you MUST use that date. ` +
             `Do NOT use image metadata or EXIF dates.`;
         if (hasPriceKeywords) {
-            // #region agent log
-            fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:getPhotoPrompt',message:'photo branch',data:{branch:'meal_with_price',caption,isEmptyCaption:caption.trim()===''},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-            // #endregion
             return {
-                branch: 'meal_with_price',
                 prompt:
                     `Analyze this meal image. Identify visible foods and estimate portions. ` +
                     `[FOOD + EXPENSE LOG INSTRUCTION]\n` +
@@ -229,11 +221,7 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
                 useHeavyModel: true,
             };
         }
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:getPhotoPrompt',message:'photo branch',data:{branch:'meal_default',caption,isEmptyCaption:caption.trim()===''},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         return {
-            branch: 'meal_default',
             prompt:
                 `Analyze this meal image. Identify visible foods and estimate portions. ` +
                 `Call log_meal with description, mealType (if inferable), proteinG, carbsG, fatG, and calories. ` +
@@ -243,22 +231,14 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
         };
     }
     if (RECEIPT_KEYWORDS.test(lower)) {
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:getPhotoPrompt',message:'photo branch',data:{branch:'receipt',caption},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         return {
-            branch: 'receipt',
             prompt:
                 caption ||
                 'Process this receipt or statement. Use log_expense for a single receipt or log_bulk_expenses for statements.',
             useHeavyModel: true,
         };
     }
-    // #region agent log
-    fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:getPhotoPrompt',message:'photo branch',data:{branch:'classify',caption,isEmptyCaption:caption.trim()===''},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     return {
-        branch: 'classify',
         prompt:
             `Classify this image. ` +
             `If it shows gym equipment, a workout, exercise machine, weights, or fitness activity: ` +
@@ -326,21 +306,9 @@ async function runChatTurn(
     toolOptions?: import('./tools/toolHandler').ToolCallOptions,
     trackSession = false
 ) {
-    let result;
-    try {
-        result = await chat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
-    } catch (error) {
-        // #region agent log
-        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:runChatTurn',message:'sendMessage failed',data:{error:error instanceof Error ? error.message : String(error),isPhoto:!!toolOptions?.photoBuffer},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
-        // #endregion
-        throw error;
-    }
+    const result = await chat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
     const response = result.response;
     const functionCalls = response.functionCalls();
-    const toolNames = functionCalls?.map((c) => c.name) ?? [];
-    // #region agent log
-    fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:runChatTurn',message:'AI tool calls',data:{toolNames,isPhoto:!!toolOptions?.photoBuffer,hasCaption:!!toolOptions?.userCaption},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
     console.log(
         '🤖 AI Intent:',
         functionCalls ? `Calling Tool: ${functionCalls[0].name}` : 'Just Chatting'
@@ -381,17 +349,13 @@ async function runPhotoChatTurn(
     toolOptions: import('./tools/toolHandler').ToolCallOptions
 ) {
     const userId = ctx.from!.id;
-    let model = useHeavyModel ? heavyModel : defaultModel;
-    let chat = model.startChat();
+    const chat = (useHeavyModel ? heavyModel : defaultModel).startChat();
     try {
         await runChatTurn(chat, ctx, prompt, userId, toolOptions);
     } catch (error) {
         if (useHeavyModel && isGeminiOverloadError(error)) {
-            // #region agent log
-            fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:runPhotoChatTurn',message:'503 fallback to lite model',data:{userId},timestamp:Date.now(),hypothesisId:'E',runId:'post-fix'})}).catch(()=>{});
-            // #endregion
-            chat = defaultModel.startChat();
-            await runChatTurn(chat, ctx, prompt, userId, toolOptions);
+            const fallbackChat = defaultModel.startChat();
+            await runChatTurn(fallbackChat, ctx, prompt, userId, toolOptions);
         } else {
             throw error;
         }
