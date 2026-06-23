@@ -27,7 +27,18 @@ export async function logWorkout(
         caloriesBurned: caloriesBurned != null ? String(caloriesBurned) : null,
         fatBurnedG: fatBurnG != null ? String(fatBurnG) : null,
     };
-    await db.insert(workouts).values(row);
+    try {
+        await db.insert(workouts).values(row);
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'gymService.ts:logWorkout',message:'db insert ok',data:{telegramUserId,date,exercise},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
+    } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'gymService.ts:logWorkout',message:'db insert failed',data:{telegramUserId,date,exercise,error:errMsg},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
+        throw err;
+    }
 }
 
 export async function getWorkoutHistory(

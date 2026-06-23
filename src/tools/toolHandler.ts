@@ -88,6 +88,10 @@ export async function handleToolCall(
     options?: ToolCallOptions
 ): Promise<ToolCallResult> {
     const userId = getUserId(ctx);
+    const isPhoto = !!(options?.photoBuffer || options?.photoFileId);
+    // #region agent log
+    fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'toolHandler.ts:handleToolCall',message:'tool invoked',data:{tool:call.name,isPhoto,userId},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
 
     if (call.name === 'log_expense') {
         const { date, amount, currency, category, description } = call.args as any;
@@ -308,6 +312,9 @@ export async function handleToolCall(
             burn?.caloriesBurned ?? null,
             burn?.fatBurnG ?? null
         );
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'toolHandler.ts:log_workout',message:'workout saved',data:{userId,date,exercise:args.exercise,sets:args.sets,reps:args.reps},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
         await chat.sendMessage([
             {
                 functionResponse: {

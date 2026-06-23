@@ -186,12 +186,16 @@ function getTextFoodPrompt(userMessage: string): string {
 const RECEIPT_KEYWORDS =
     /\b(receipt|bill|invoice|statement|expense|transaction|bank|credit card)\b/;
 
-function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boolean } {
+function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boolean; branch: string } {
     const lower = caption.toLowerCase();
     const hasPriceKeywords = EXPENSE_PRICE_KEYWORDS.test(caption);
     const isTodayMeal = /\btoday\b/i.test(caption);
     if (GYM_KEYWORDS.test(lower)) {
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:getPhotoPrompt',message:'photo branch',data:{branch:'gym_keywords',caption},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         return {
+            branch: 'gym_keywords',
             prompt: `You are a gym assistant. Analyze this image or caption and log workouts with log_workout. ${caption}`,
             useHeavyModel: false,
         };
@@ -207,7 +211,11 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
             `If the caption says "today", you MUST use that date. ` +
             `Do NOT use image metadata or EXIF dates.`;
         if (hasPriceKeywords) {
+            // #region agent log
+            fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:getPhotoPrompt',message:'photo branch',data:{branch:'meal_with_price',caption,isEmptyCaption:caption.trim()===''},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+            // #endregion
             return {
+                branch: 'meal_with_price',
                 prompt:
                     `Analyze this meal image. Identify visible foods and estimate portions. ` +
                     `[FOOD + EXPENSE LOG INSTRUCTION]\n` +
@@ -219,7 +227,11 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
                 useHeavyModel: true,
             };
         }
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:getPhotoPrompt',message:'photo branch',data:{branch:'meal_default',caption,isEmptyCaption:caption.trim()===''},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         return {
+            branch: 'meal_default',
             prompt:
                 `Analyze this meal image. Identify visible foods and estimate portions. ` +
                 `Call log_meal with description, mealType (if inferable), proteinG, carbsG, fatG, and calories. ` +
@@ -229,14 +241,22 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
         };
     }
     if (RECEIPT_KEYWORDS.test(lower)) {
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:getPhotoPrompt',message:'photo branch',data:{branch:'receipt',caption},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         return {
+            branch: 'receipt',
             prompt:
                 caption ||
                 'Process this receipt or statement. Use log_expense for a single receipt or log_bulk_expenses for statements.',
             useHeavyModel: true,
         };
     }
+    // #region agent log
+    fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:getPhotoPrompt',message:'photo branch',data:{branch:'classify',caption,isEmptyCaption:caption.trim()===''},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     return {
+        branch: 'classify',
         prompt:
             `Classify this image first. ` +
             `If it is FOOD: call log_meal with full macros (proteinG, carbsG, fatG, calories required). ` +
@@ -300,6 +320,10 @@ async function runChatTurn(
     const result = await chat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
     const response = result.response;
     const functionCalls = response.functionCalls();
+    const toolNames = functionCalls?.map((c) => c.name) ?? [];
+    // #region agent log
+    fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:runChatTurn',message:'AI tool calls',data:{toolNames,isPhoto:!!toolOptions?.photoBuffer,hasCaption:!!toolOptions?.userCaption},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     console.log(
         '🤖 AI Intent:',
         functionCalls ? `Calling Tool: ${functionCalls[0].name}` : 'Just Chatting'
