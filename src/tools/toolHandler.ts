@@ -9,6 +9,7 @@ import {
     getAllFixedExpenses,
     deleteFixedExpense,
     logBulkExpenses,
+    formatExpenseLogReply,
 } from '../services/expenseService';
 import { createCalendarEvent, getSchedule } from '../services/calendarService';
 import {
@@ -16,6 +17,7 @@ import {
     getWorkoutHistory,
     getRecentWorkoutsForSuggestion,
     getWorkoutBurnSummary,
+    formatWorkoutLogReply,
 } from '../services/gymService';
 import { estimateBurn } from '../services/burnCalculator';
 import {
@@ -97,7 +99,7 @@ export async function handleToolCall(
             { functionResponse: { name: 'log_expense', response: { status: 'success' } } },
         ]);
         await ctx.reply(
-            `✅ Logged ${currency || 'MYR'} ${amount} for ${description || category} on ${resolvedDate}.`
+            formatExpenseLogReply(resolvedDate, amount, currency || 'MYR', category, description)
         );
         return 'complete';
     } else if (call.name === 'get_spending_summary') {
@@ -321,24 +323,16 @@ export async function handleToolCall(
                 },
             },
         ]);
-        const detail = [
-            args.sets && args.reps ? `${args.sets}x${args.reps}` : args.sets ? `${args.sets} sets` : null,
-            args.durationMin != null
-                ? args.durationMin < 1
-                    ? `${Math.round(args.durationMin * 60)}sec`
-                    : `${args.durationMin}min`
-                : null,
-            args.weightKg ? `${args.weightKg}kg` : null,
-        ]
-            .filter(Boolean)
-            .join(' @ ');
-        let reply = `💪 Logged ${args.exercise}${detail ? ` (${detail})` : ''} on ${date}.`;
-        if (burn) {
-            reply += `\n~${burn.caloriesBurned} cal burned · ~${burn.fatBurnG}g fat (approx.)`;
-        } else {
-            reply += `\nSet your body weight (e.g. "I weigh 70kg") for calorie burn estimates.`;
-        }
-        await ctx.reply(reply);
+        await ctx.reply(
+            formatWorkoutLogReply(date, args.exercise, {
+                sets: args.sets,
+                reps: args.reps,
+                weightKg: args.weightKg,
+                durationMin: args.durationMin,
+                notes: args.notes,
+                burn: burn ?? null,
+            })
+        );
         return 'complete';
     } else if (call.name === 'get_workout_summary') {
         const args = call.args as { startDate: string; endDate: string };
@@ -495,7 +489,7 @@ export async function handleToolCall(
             },
         ]);
         await ctx.reply(
-            `✅ Updated meal #${args.id}:\n` + formatMealLogReply(meal, date, progress, args.id)
+            formatMealLogReply(meal, date, progress, args.id, '✅ Updated')
         );
         return 'complete';
     } else if (call.name === 'delete_meal') {

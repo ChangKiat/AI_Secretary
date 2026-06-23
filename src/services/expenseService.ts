@@ -94,6 +94,23 @@ export async function appendExpense(
     return true;
 }
 
+export function formatExpenseLogReply(
+    date: string,
+    amount: number,
+    currency: string,
+    category: string,
+    description?: string
+): string {
+    const lines = [
+        '✅ Logged',
+        `📅 Date: ${date}`,
+        `💵 Amount: ${currency || 'MYR'} ${amount}`,
+        `📁 Category: ${resolveCategory(category)}`,
+    ];
+    if (description) lines.push(`📝 Description: ${description}`);
+    return lines.join('\n');
+}
+
 export async function getSpendingSummary(
     category?: string,
     description?: string,

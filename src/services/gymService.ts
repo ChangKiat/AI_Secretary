@@ -2,6 +2,43 @@ import { and, eq, desc } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { workouts } from '../db/schema';
 
+export function formatWorkoutLogReply(
+    date: string,
+    exercise: string,
+    opts: {
+        sets?: number;
+        reps?: number;
+        weightKg?: number;
+        durationMin?: number;
+        notes?: string;
+        burn?: { caloriesBurned: number; fatBurnG: number } | null;
+    }
+): string {
+    const detail = [
+        opts.sets && opts.reps ? `${opts.sets}x${opts.reps}` : opts.sets ? `${opts.sets} sets` : null,
+        opts.durationMin != null
+            ? opts.durationMin < 1
+                ? `${Math.round(opts.durationMin * 60)}sec`
+                : `${opts.durationMin}min`
+            : null,
+        opts.weightKg ? `${opts.weightKg}kg` : null,
+    ]
+        .filter(Boolean)
+        .join(' @ ');
+
+    const lines = ['✅ Logged', `📅 Date: ${date}`, `💪 Exercise: ${exercise}`];
+    if (detail) lines.push(`📊 Details: ${detail}`);
+    if (opts.burn) {
+        lines.push(
+            `🔥 Burn: ~${opts.burn.caloriesBurned} cal · ~${opts.burn.fatBurnG}g fat (approx.)`
+        );
+    } else {
+        lines.push('💡 Tip: Set your body weight (e.g. "I weigh 70kg") for burn estimates.');
+    }
+    if (opts.notes) lines.push(`📝 Notes: ${opts.notes}`);
+    return lines.join('\n');
+}
+
 export async function logWorkout(
     telegramUserId: number,
     date: string,

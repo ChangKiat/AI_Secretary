@@ -317,27 +317,31 @@ export function formatMealLogReply(
     meal: MealLogInput,
     date: string,
     todayProgress: ReturnType<typeof buildDayProgress>,
-    mealId?: number
+    mealId?: number,
+    header = '✅ Logged'
 ) {
-    const mealLine = meal.mealType
-        ? `${meal.description} (${meal.mealType})`
-        : meal.description;
     const p = Math.round(meal.proteinG);
     const c = Math.round(meal.carbsG);
     const f = Math.round(meal.fatG);
     const cal = Math.round(meal.calories);
-
     const t = todayProgress;
-    const idLine = mealId != null ? ` (#${mealId})` : '';
-    return (
-        `🍽️ ${mealLine}${idLine}\n` +
-        `Cal ${cal} · Protein ${p}g · Carbs ${c}g · Fat ${f}g\n` +
-        `Today: ${t.calories.consumed}/${t.calories.target} cal · ` +
-        `Protein ${t.protein.consumed}/${t.protein.target}g · ` +
-        `Carbs ${t.carbs.consumed}/${t.carbs.target}g · ` +
-        `Fat ${t.fat.consumed}/${t.fat.target}g\n` +
-        `(approximate estimates)`
+
+    const lines = [header, `📅 Date: ${date}`];
+    if (mealId != null) lines.push(`#️⃣ ID: ${mealId}`);
+    if (meal.mealType) lines.push(`🍽️ Type: ${meal.mealType}`);
+    lines.push(
+        `📝 Description: ${meal.description}`,
+        `🔥 Calories: ${cal}`,
+        `💪 Protein: ${p}g`,
+        `🍞 Carbs: ${c}g`,
+        `🧈 Fat: ${f}g`,
+        `📈 Today: ${t.calories.consumed}/${t.calories.target} cal · ` +
+            `Protein ${t.protein.consumed}/${t.protein.target}g · ` +
+            `Carbs ${t.carbs.consumed}/${t.carbs.target}g · ` +
+            `Fat ${t.fat.consumed}/${t.fat.target}g`,
+        '(approximate estimates)'
     );
+    return lines.join('\n');
 }
 
 export async function getMealById(id: number, telegramUserId: number) {
