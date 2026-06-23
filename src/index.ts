@@ -196,15 +196,17 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
         // #endregion
         return {
             branch: 'gym_keywords',
-            prompt: `You are a gym assistant. Analyze this image or caption and log workouts with log_workout. ${caption}`,
+            prompt:
+                `You are a gym assistant. Analyze this workout image and MUST call log_workout ` +
+                `with exercise, sets, reps, weightKg, and durationMin from what you see. ` +
+                `Do NOT call get_workout_summary or get_nutrition_summary. ${caption}`,
             useHeavyModel: false,
         };
     }
+    const isEmptyCaption = caption.trim() === '';
     const isLikelyMealPhoto =
-        FOOD_KEYWORDS.test(lower) ||
-        hasPriceKeywords ||
-        isTodayMeal ||
-        (!RECEIPT_KEYWORDS.test(lower) && caption.trim() === '');
+        !isEmptyCaption &&
+        (FOOD_KEYWORDS.test(lower) || hasPriceKeywords || isTodayMeal);
     if (isLikelyMealPhoto) {
         const dateInstruction =
             `Use today's date from SYSTEM CONTEXT for the date field. ` +
@@ -258,12 +260,14 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
     return {
         branch: 'classify',
         prompt:
-            `Classify this image first. ` +
+            `Classify this image. ` +
+            `If it shows gym equipment, a workout, exercise machine, weights, or fitness activity: ` +
+            `MUST call log_workout with exercise, sets, reps, weightKg, durationMin. ` +
             `If it is FOOD: call log_meal with full macros (proteinG, carbsG, fatG, calories required). ` +
             `If it is a RECEIPT or bank statement: use log_expense or log_bulk_expenses. ` +
-            `If it is GYM equipment or a workout: use log_workout. ` +
+            `Do NOT call get_workout_summary or get_nutrition_summary when logging from a photo. ` +
             `Do not log food as expenses. ${caption}`.trim(),
-        useHeavyModel: true,
+        useHeavyModel: false,
     };
 }
 
@@ -309,6 +313,11 @@ function updateSessionState(
     }
 }
 
+function isGeminiOverloadError(error: unknown): boolean {
+    const msg = error instanceof Error ? error.message : String(error);
+    return msg.includes('503') || msg.includes('Service Unavailable') || msg.includes('high demand');
+}
+
 async function runChatTurn(
     chat: ChatSession,
     ctx: import('telegraf').Context,
@@ -317,7 +326,15 @@ async function runChatTurn(
     toolOptions?: import('./tools/toolHandler').ToolCallOptions,
     trackSession = false
 ) {
-    const result = await chat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
+    let result;
+    try {
+        result = await chat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
+    } catch (error) {
+        // #region agent log
+        fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:runChatTurn',message:'sendMessage failed',data:{error:error instanceof Error ? error.message : String(error),isPhoto:!!toolOptions?.photoBuffer},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
+        throw error;
+    }
     const response = result.response;
     const functionCalls = response.functionCalls();
     const toolNames = functionCalls?.map((c) => c.name) ?? [];
@@ -357,6 +374,30 @@ async function runChatTurn(
     }
 }
 
+async function runPhotoChatTurn(
+    ctx: import('telegraf').Context,
+    prompt: string | (string | Record<string, unknown>)[],
+    useHeavyModel: boolean,
+    toolOptions: import('./tools/toolHandler').ToolCallOptions
+) {
+    const userId = ctx.from!.id;
+    let model = useHeavyModel ? heavyModel : defaultModel;
+    let chat = model.startChat();
+    try {
+        await runChatTurn(chat, ctx, prompt, userId, toolOptions);
+    } catch (error) {
+        if (useHeavyModel && isGeminiOverloadError(error)) {
+            // #region agent log
+            fetch('http://127.0.0.1:7252/ingest/33c6738f-5e96-4778-a16c-73a09bcd6a03',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'bb886f'},body:JSON.stringify({sessionId:'bb886f',location:'index.ts:runPhotoChatTurn',message:'503 fallback to lite model',data:{userId},timestamp:Date.now(),hypothesisId:'E',runId:'post-fix'})}).catch(()=>{});
+            // #endregion
+            chat = defaultModel.startChat();
+            await runChatTurn(chat, ctx, prompt, userId, toolOptions);
+        } else {
+            throw error;
+        }
+    }
+}
+
 bot.on(message('text'), async (ctx) => {
     const userMessage = ctx.message.text;
     const userId = ctx.from.id;
@@ -386,8 +427,6 @@ bot.on(message('photo'), async (ctx) => {
         const caption = ctx.message.caption || '';
         const { prompt: photoInstruction, useHeavyModel } = getPhotoPrompt(caption);
         const prompt = buildContextPrompt(caption) + '\n' + photoInstruction;
-        const model = useHeavyModel ? heavyModel : defaultModel;
-        const chat = model.startChat();
 
         const fileLink = await bot.telegram.getFileLink(photo.file_id);
         const response = await fetch(fileLink.href);
@@ -400,10 +439,16 @@ bot.on(message('photo'), async (ctx) => {
             userCaption: caption,
         };
 
-        await runChatTurn(chat, ctx, [imagePart, prompt], ctx.from.id, toolOptions);
+        await runPhotoChatTurn(ctx, [imagePart, prompt], useHeavyModel, toolOptions);
     } catch (error) {
         console.error('Error processing image:', error);
-        await ctx.reply('Sorry, I had trouble reading that image.');
+        if (isGeminiOverloadError(error)) {
+            await ctx.reply(
+                '⏳ The AI service is busy right now. Please try sending the image again in a moment.'
+            );
+        } else {
+            await ctx.reply('Sorry, I had trouble reading that image.');
+        }
     }
 });
 
@@ -445,16 +490,17 @@ bot.on(message('document'), async (ctx) => {
         const userCaption = ctx.message.caption || '';
 
         if (mimeType.startsWith('image/') && !isFinancialDocumentCaption(userCaption)) {
-            const { prompt } = getPhotoPrompt(userCaption);
-            const chat = heavyModel.startChat();
+            const { prompt, useHeavyModel } = getPhotoPrompt(userCaption);
+            const fullPrompt = buildContextPrompt(userCaption) + '\n' + prompt;
             const fileLink = await bot.telegram.getFileLink(document.file_id);
             const fileResponse = await fetch(fileLink.href);
             const photoBuffer = Buffer.from(await fileResponse.arrayBuffer());
 
-            await runChatTurn(chat, ctx, [imagePart, prompt], ctx.from.id, {
+            await runPhotoChatTurn(ctx, [imagePart, fullPrompt], useHeavyModel, {
                 photoFileId: document.file_id,
                 photoBuffer,
                 photoMimeType: mimeType,
+                userCaption,
             });
             return;
         }

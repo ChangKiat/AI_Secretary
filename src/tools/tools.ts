@@ -322,7 +322,7 @@ export const deleteMealDeclaration: FunctionDeclaration = {
 export const getWorkoutSummaryDeclaration: FunctionDeclaration = {
     name: 'get_workout_summary',
     description:
-        'Gets workout sessions and total calories/fat burned for a date range. Use for "how many calories did I burn today" questions.',
+        'Gets workout sessions and total calories/fat burned for a date range. Use ONLY when the user asks how much they burned (e.g. "how many calories did I burn today"). Do NOT use when the user sends a workout photo or reports a new exercise—use log_workout instead.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
