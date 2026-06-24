@@ -190,7 +190,8 @@ export const checkScheduleDeclaration: FunctionDeclaration = {
 
 export const logWorkoutDeclaration: FunctionDeclaration = {
     name: 'log_workout',
-    description: 'Logs a gym exercise session. Use when the user reports workouts, sets, reps, or weights.',
+    description:
+        'Logs a SINGLE gym exercise. Use only when the user reports one exercise. For 2+ exercises in one message, use log_bulk_workouts instead—never call log_workout multiple times.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -203,6 +204,40 @@ export const logWorkoutDeclaration: FunctionDeclaration = {
             notes: { type: SchemaType.STRING, description: 'Optional notes.' },
         },
         required: ['exercise'],
+    },
+};
+
+export const logBulkWorkoutsDeclaration: FunctionDeclaration = {
+    name: 'log_bulk_workouts',
+    description:
+        'Logs multiple exercises from one workout session in a single call. Use when the user lists 2 or more exercises (leg day, push day, bullet list). Do NOT call log_workout repeatedly.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            date: { type: SchemaType.STRING, description: 'YYYY-MM-DD for the session. Defaults to today.' },
+            sessionNotes: {
+                type: SchemaType.STRING,
+                description: 'Optional session label e.g. "Leg workout, 4 sets x 12 reps".',
+            },
+            workouts: {
+                type: SchemaType.ARRAY,
+                description: 'All exercises in the session.',
+                items: {
+                    type: SchemaType.OBJECT,
+                    properties: {
+                        exercise: { type: SchemaType.STRING, description: 'Exercise name e.g. Squat, Deadlift.' },
+                        sets: { type: SchemaType.NUMBER, description: 'Number of sets.' },
+                        reps: { type: SchemaType.NUMBER, description: 'Reps per set.' },
+                        weightKg: { type: SchemaType.NUMBER, description: 'Weight in kg.' },
+                        durationMin: { type: SchemaType.NUMBER, description: 'Duration in minutes.' },
+                        notes: { type: SchemaType.STRING, description: 'Optional notes e.g. superset.' },
+                        date: { type: SchemaType.STRING, description: 'Optional per-exercise date YYYY-MM-DD. Defaults to top-level date.' },
+                    },
+                    required: ['exercise'],
+                },
+            },
+        },
+        required: ['workouts'],
     },
 };
 
@@ -360,6 +395,7 @@ export function getAllFunctionDeclarations(): FunctionDeclaration[] {
         checkScheduleDeclaration,
         buildLogBulkExpensesDeclaration(),
         logWorkoutDeclaration,
+        logBulkWorkoutsDeclaration,
         getWorkoutHistoryDeclaration,
         suggestWorkoutDeclaration,
         logMealDeclaration,

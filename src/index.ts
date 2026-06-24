@@ -5,6 +5,7 @@ import 'dotenv/config';
 import { appendExpense, getFixedExpensesForToday } from './services/expenseService';
 import { ChatSession } from '@google/generative-ai';
 import { handleToolCall } from './tools/toolHandler';
+import { formatBulkWorkoutLogReply } from './services/gymService';
 import {
     createGeminiModel,
     GEMINI_MODEL_DEFAULT,
@@ -193,8 +194,10 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
     if (GYM_KEYWORDS.test(lower)) {
         return {
             prompt:
-                `You are a gym assistant. Analyze this workout image and MUST call log_workout ` +
-                `with exercise, sets, reps, weightKg, and durationMin from what you see. ` +
+                `You are a gym assistant. Analyze this workout image. ` +
+                `If multiple exercises are visible, call log_bulk_workouts once with all exercises. ` +
+                `If only one exercise, call log_workout. ` +
+                `Include sets, reps, weightKg, and durationMin. ` +
                 `Do NOT call get_workout_summary or get_nutrition_summary. ${caption}`,
             useHeavyModel: false,
         };
@@ -242,7 +245,8 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
         prompt:
             `Classify this image. ` +
             `If it shows gym equipment, a workout, exercise machine, weights, or fitness activity: ` +
-            `MUST call log_workout with exercise, sets, reps, weightKg, durationMin. ` +
+            `call log_workout for one exercise, or log_bulk_workouts if multiple exercises are visible. ` +
+            `Include sets, reps, weightKg, durationMin. ` +
             `If it is FOOD: call log_meal with full macros (proteinG, carbsG, fatG, calories required). ` +
             `If it is a RECEIPT or bank statement: use log_expense or log_bulk_expenses. ` +
             `Do NOT call get_workout_summary or get_nutrition_summary when logging from a photo. ` +
@@ -316,12 +320,31 @@ async function runChatTurn(
 
     if (functionCalls && functionCalls.length > 0) {
         let shouldClearSession = true;
+        const workoutCallCount = functionCalls.filter((c) => c.name === 'log_workout').length;
+        const shouldBatchWorkouts = workoutCallCount > 1;
+        const workoutBatchCollector: import('./services/gymService').WorkoutLogEntry[] = [];
+
         for (const call of functionCalls) {
-            const toolResult = await handleToolCall(call, chat, ctx, toolOptions);
+            const callOptions =
+                shouldBatchWorkouts && call.name === 'log_workout'
+                    ? {
+                          ...toolOptions,
+                          suppressWorkoutReply: true,
+                          workoutBatchCollector,
+                      }
+                    : toolOptions;
+            const toolResult = await handleToolCall(call, chat, ctx, callOptions);
             if (toolResult === 'awaiting_input') {
                 shouldClearSession = false;
             }
         }
+
+        if (workoutBatchCollector.length > 1) {
+            await ctx.reply(
+                formatBulkWorkoutLogReply(workoutBatchCollector[0].date, workoutBatchCollector)
+            );
+        }
+
         if (trackSession) {
             if (shouldClearSession) {
                 userSessions.delete(userId);

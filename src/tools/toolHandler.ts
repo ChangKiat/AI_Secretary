@@ -14,10 +14,13 @@ import {
 import { createCalendarEvent, getSchedule } from '../services/calendarService';
 import {
     logWorkout,
+    logBulkWorkouts,
     getWorkoutHistory,
     getRecentWorkoutsForSuggestion,
     getWorkoutBurnSummary,
     formatWorkoutLogReply,
+    formatBulkWorkoutLogReply,
+    WorkoutLogEntry,
 } from '../services/gymService';
 import { estimateBurn } from '../services/burnCalculator';
 import {
@@ -43,6 +46,8 @@ export interface ToolCallOptions {
     photoMimeType?: string;
     userCaption?: string;
     isVoiceInput?: boolean;
+    suppressWorkoutReply?: boolean;
+    workoutBatchCollector?: WorkoutLogEntry[];
 }
 function getUserId(ctx: Context): number {
     return ctx.from!.id;
@@ -81,6 +86,64 @@ function resolveLogDate(argsDate: string | undefined, options?: ToolCallOptions)
     }
 
     return argsDate;
+}
+
+interface WorkoutArgs {
+    date?: string;
+    exercise: string;
+    sets?: number;
+    reps?: number;
+    weightKg?: number;
+    durationMin?: number;
+    notes?: string;
+}
+
+async function buildWorkoutEntry(
+    args: WorkoutArgs,
+    date: string,
+    bodyWeightKg: number | null
+): Promise<WorkoutLogEntry> {
+    const burn = estimateBurn(
+        args.exercise,
+        args.durationMin,
+        args.sets,
+        args.reps,
+        args.weightKg,
+        bodyWeightKg
+    );
+
+    return {
+        date,
+        exercise: args.exercise,
+        sets: args.sets,
+        reps: args.reps,
+        weightKg: args.weightKg,
+        durationMin: args.durationMin,
+        notes: args.notes,
+        burn: burn ?? null,
+    };
+}
+
+async function processWorkoutLog(
+    userId: number,
+    args: WorkoutArgs,
+    date: string,
+    bodyWeightKg: number | null
+): Promise<WorkoutLogEntry> {
+    const entry = await buildWorkoutEntry(args, date, bodyWeightKg);
+    await logWorkout(
+        userId,
+        date,
+        args.exercise,
+        args.sets,
+        args.reps,
+        args.weightKg,
+        args.durationMin,
+        args.notes,
+        entry.burn?.caloriesBurned ?? null,
+        entry.burn?.fatBurnG ?? null
+    );
+    return entry;
 }
 
 export async function handleToolCall(
@@ -278,61 +341,94 @@ export async function handleToolCall(
         );
         return 'complete';
     } else if (call.name === 'log_workout') {
-        const args = call.args as {
-            date?: string;
-            exercise: string;
-            sets?: number;
-            reps?: number;
-            weightKg?: number;
-            durationMin?: number;
-            notes?: string;
-        };
-        const date = args.date || todayISO();
+        const args = call.args as WorkoutArgs;
+        const date = resolveLogDate(args.date, options);
         const settings = await getNutritionTargets(userId);
-        const burn = estimateBurn(
-            args.exercise,
-            args.durationMin,
-            args.sets,
-            args.reps,
-            args.weightKg,
-            settings.bodyWeightKg
-        );
+        const entry = await processWorkoutLog(userId, args, date, settings.bodyWeightKg);
 
-        await logWorkout(
-            userId,
-            date,
-            args.exercise,
-            args.sets,
-            args.reps,
-            args.weightKg,
-            args.durationMin,
-            args.notes,
-            burn?.caloriesBurned ?? null,
-            burn?.fatBurnG ?? null
-        );
         await chat.sendMessage([
             {
                 functionResponse: {
                     name: 'log_workout',
                     response: {
                         status: 'success',
-                        caloriesBurned: burn?.caloriesBurned ?? null,
-                        fatBurnG: burn?.fatBurnG ?? null,
+                        caloriesBurned: entry.burn?.caloriesBurned ?? null,
+                        fatBurnG: entry.burn?.fatBurnG ?? null,
                         bodyWeightKg: settings.bodyWeightKg,
                     },
                 },
             },
         ]);
-        await ctx.reply(
-            formatWorkoutLogReply(date, args.exercise, {
-                sets: args.sets,
-                reps: args.reps,
-                weightKg: args.weightKg,
-                durationMin: args.durationMin,
-                notes: args.notes,
-                burn: burn ?? null,
-            })
+
+        if (options?.suppressWorkoutReply) {
+            options.workoutBatchCollector?.push(entry);
+        } else {
+            await ctx.reply(
+                formatWorkoutLogReply(date, args.exercise, {
+                    sets: args.sets,
+                    reps: args.reps,
+                    weightKg: args.weightKg,
+                    durationMin: args.durationMin,
+                    notes: args.notes,
+                    burn: entry.burn ?? null,
+                })
+            );
+        }
+        return 'complete';
+    } else if (call.name === 'log_bulk_workouts') {
+        const args = call.args as {
+            date?: string;
+            sessionNotes?: string;
+            workouts: WorkoutArgs[];
+        };
+        const date = resolveLogDate(args.date, options);
+        const settings = await getNutritionTargets(userId);
+        const entries: WorkoutLogEntry[] = [];
+
+        for (const w of args.workouts) {
+            const wDate = w.date ? resolveLogDate(w.date, options) : date;
+            entries.push(await buildWorkoutEntry(w, wDate, settings.bodyWeightKg));
+        }
+
+        await logBulkWorkouts(
+            userId,
+            entries.map((entry) => ({
+                date: entry.date,
+                exercise: entry.exercise,
+                sets: entry.sets,
+                reps: entry.reps,
+                weightKg: entry.weightKg,
+                durationMin: entry.durationMin,
+                notes: entry.notes,
+                caloriesBurned: entry.burn?.caloriesBurned ?? null,
+                fatBurnG: entry.burn?.fatBurnG ?? null,
+            }))
         );
+
+        let totalCal = 0;
+        let totalFat = 0;
+        for (const entry of entries) {
+            if (entry.burn) {
+                totalCal += entry.burn.caloriesBurned;
+                totalFat += entry.burn.fatBurnG;
+            }
+        }
+
+        await chat.sendMessage([
+            {
+                functionResponse: {
+                    name: 'log_bulk_workouts',
+                    response: {
+                        status: 'success',
+                        count: entries.length,
+                        totalCaloriesBurned: totalCal > 0 ? Math.round(totalCal) : null,
+                        totalFatBurnG: totalFat > 0 ? Math.round(totalFat * 10) / 10 : null,
+                        bodyWeightKg: settings.bodyWeightKg,
+                    },
+                },
+            },
+        ]);
+        await ctx.reply(formatBulkWorkoutLogReply(date, entries, args.sessionNotes));
         return 'complete';
     } else if (call.name === 'get_workout_summary') {
         const args = call.args as { startDate: string; endDate: string };

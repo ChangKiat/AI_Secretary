@@ -2,6 +2,31 @@ import { and, eq, desc } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { workouts } from '../db/schema';
 
+export interface WorkoutLogEntry {
+    date: string;
+    exercise: string;
+    sets?: number;
+    reps?: number;
+    weightKg?: number;
+    durationMin?: number;
+    notes?: string;
+    burn?: { caloriesBurned: number; fatBurnG: number } | null;
+}
+
+function formatWorkoutDetail(entry: Pick<WorkoutLogEntry, 'sets' | 'reps' | 'weightKg' | 'durationMin'>): string {
+    return [
+        entry.sets && entry.reps ? `${entry.sets}x${entry.reps}` : entry.sets ? `${entry.sets} sets` : null,
+        entry.durationMin != null
+            ? entry.durationMin < 1
+                ? `${Math.round(entry.durationMin * 60)}sec`
+                : `${entry.durationMin}min`
+            : null,
+        entry.weightKg ? `${entry.weightKg}kg` : null,
+    ]
+        .filter(Boolean)
+        .join(' @ ');
+}
+
 export function formatWorkoutLogReply(
     date: string,
     exercise: string,
@@ -14,17 +39,7 @@ export function formatWorkoutLogReply(
         burn?: { caloriesBurned: number; fatBurnG: number } | null;
     }
 ): string {
-    const detail = [
-        opts.sets && opts.reps ? `${opts.sets}x${opts.reps}` : opts.sets ? `${opts.sets} sets` : null,
-        opts.durationMin != null
-            ? opts.durationMin < 1
-                ? `${Math.round(opts.durationMin * 60)}sec`
-                : `${opts.durationMin}min`
-            : null,
-        opts.weightKg ? `${opts.weightKg}kg` : null,
-    ]
-        .filter(Boolean)
-        .join(' @ ');
+    const detail = formatWorkoutDetail(opts);
 
     const lines = ['✅ Logged', `📅 Date: ${date}`, `💪 Exercise: ${exercise}`];
     if (detail) lines.push(`📊 Details: ${detail}`);
@@ -36,6 +51,44 @@ export function formatWorkoutLogReply(
         lines.push('💡 Tip: Set your body weight (e.g. "I weigh 70kg") for burn estimates.');
     }
     if (opts.notes) lines.push(`📝 Notes: ${opts.notes}`);
+    return lines.join('\n');
+}
+
+export function formatBulkWorkoutLogReply(
+    date: string,
+    entries: WorkoutLogEntry[],
+    sessionNotes?: string
+): string {
+    const lines = ['✅ Logged', `📅 Date: ${date}`];
+    if (sessionNotes) lines.push(`📋 Session: ${sessionNotes}`);
+    lines.push('');
+    for (const entry of entries) {
+        const detail = formatWorkoutDetail(entry);
+        let line = `• ${entry.exercise}`;
+        if (detail) line += ` — ${detail}`;
+        if (entry.notes) line += ` (${entry.notes})`;
+        lines.push(line);
+    }
+
+    let totalCal = 0;
+    let totalFat = 0;
+    let hasBurn = false;
+    for (const entry of entries) {
+        if (entry.burn) {
+            totalCal += entry.burn.caloriesBurned;
+            totalFat += entry.burn.fatBurnG;
+            hasBurn = true;
+        }
+    }
+
+    lines.push('');
+    if (hasBurn) {
+        lines.push(
+            `🔥 Total burn: ~${Math.round(totalCal)} cal · ~${Math.round(totalFat * 10) / 10}g fat (approx.)`
+        );
+    } else {
+        lines.push('💡 Tip: Set your body weight (e.g. "I weigh 70kg") for burn estimates.');
+    }
     return lines.join('\n');
 }
 
@@ -65,6 +118,37 @@ export async function logWorkout(
         fatBurnedG: fatBurnG != null ? String(fatBurnG) : null,
     };
     await db.insert(workouts).values(row);
+}
+
+export async function logBulkWorkouts(
+    telegramUserId: number,
+    workoutList: {
+        date: string;
+        exercise: string;
+        sets?: number;
+        reps?: number;
+        weightKg?: number;
+        durationMin?: number;
+        notes?: string;
+        caloriesBurned?: number | null;
+        fatBurnG?: number | null;
+    }[]
+) {
+    const db = requireDb();
+    await db.insert(workouts).values(
+        workoutList.map((w) => ({
+            telegramUserId,
+            date: w.date,
+            exercise: w.exercise,
+            sets: w.sets ?? null,
+            reps: w.reps ?? null,
+            weightKg: w.weightKg != null ? String(w.weightKg) : null,
+            durationMin: w.durationMin != null ? String(w.durationMin) : null,
+            notes: w.notes ?? null,
+            caloriesBurned: w.caloriesBurned != null ? String(w.caloriesBurned) : null,
+            fatBurnedG: w.fatBurnG != null ? String(w.fatBurnG) : null,
+        }))
+    );
 }
 
 export async function getWorkoutHistory(
