@@ -229,7 +229,7 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
                 `Analyze this meal image. Identify visible foods and estimate portions. ` +
                 `Call log_meal with description, mealType (if inferable), proteinG, carbsG, fatG, and calories. ` +
                 `${dateInstruction} ` +
-                `All macro values are required and approximate. ${caption}`.trim(),
+                `All macro values are required and approximate. Do NOT ask the user for macro values. ${caption}`.trim(),
             useHeavyModel: true,
         };
     }
@@ -241,17 +241,24 @@ function getPhotoPrompt(caption: string): { prompt: string; useHeavyModel: boole
             useHeavyModel: true,
         };
     }
+  const dateInstruction =
+        `Use today's date from SYSTEM CONTEXT for the date field. ` +
+        `Infer mealType from time of day when possible. ` +
+        `Do NOT use image metadata or EXIF dates.`;
     return {
         prompt:
             `Classify this image. ` +
             `If it shows gym equipment, a workout, exercise machine, weights, or fitness activity: ` +
             `call log_workout for one exercise, or log_bulk_workouts if multiple exercises are visible. ` +
             `Include sets, reps, weightKg, durationMin. ` +
-            `If it is FOOD: call log_meal with full macros (proteinG, carbsG, fatG, calories required). ` +
+            `If it is FOOD: identify visible foods, estimate portions, and call log_meal immediately with ` +
+            `description, mealType (if inferable), proteinG, carbsG, fatG, and calories. ` +
+            `${dateInstruction} ` +
+            `Do NOT ask the user for dish name, macros, calories, meal type, or date—you must estimate from the image. ` +
             `If it is a RECEIPT or bank statement: use log_expense or log_bulk_expenses. ` +
             `Do NOT call get_workout_summary or get_nutrition_summary when logging from a photo. ` +
             `Do not log food as expenses. ${caption}`.trim(),
-        useHeavyModel: false,
+        useHeavyModel: true,
     };
 }
 
