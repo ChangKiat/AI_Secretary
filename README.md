@@ -123,3 +123,4 @@ Deploy to Render/Koyeb with:
 - Default model is Flash-Lite (~6x cheaper output than 2.5 Flash)
 - PDF bank statements use the heavy model automatically
 - Adjust via `GEMINI_MODEL_DEFAULT` and `GEMINI_MODEL_HEAVY`
+- **Image tokens**: photos are downscaled to `GEMINI_IMAGE_MAX_PX` (default 768) before Gemini — typically **258 tokens/image** vs thousands for full phone photos. Meal photos stored in Supabase stay full resolution. Raise `GEMINI_IMAGE_MAX_PX` (e.g. 1024) if receipt OCR misses small text.

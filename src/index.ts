@@ -13,11 +13,13 @@ import {
 } from './config/gemini';
 import { loadExpenseCategories } from './config/expenseCategories';
 import { updateProteinTarget, updateNutritionTargets } from './services/nutritionService';
+import { parseMaxPx, resizeForGemini } from './utils/imageForGemini';
 import cron from 'node-cron';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 const MY_CHAT_ID = process.env.MY_TELEGRAM_CHAT_ID!;
+const GEMINI_IMAGE_MAX_PX = parseMaxPx(process.env.GEMINI_IMAGE_MAX_PX, 768);
 
 interface UserChatState {
     chat: ChatSession;
@@ -417,14 +419,11 @@ bot.on(message('photo'), async (ctx) => {
     await ctx.sendChatAction('typing');
     try {
         const photo = ctx.message.photo[ctx.message.photo.length - 1];
-        const imagePart = await getGeminiFilePart(photo.file_id, 'image/jpeg');
+        const photoBuffer = await fetchTelegramFile(photo.file_id);
+        const imagePart = await buildGeminiFilePart(photoBuffer, 'image/jpeg');
         const caption = ctx.message.caption || '';
         const { prompt: photoInstruction, useHeavyModel } = getPhotoPrompt(caption);
         const prompt = buildContextPrompt(caption) + '\n' + photoInstruction;
-
-        const fileLink = await bot.telegram.getFileLink(photo.file_id);
-        const response = await fetch(fileLink.href);
-        const photoBuffer = Buffer.from(await response.arrayBuffer());
 
         const toolOptions: import('./tools/toolHandler').ToolCallOptions = {
             photoFileId: photo.file_id,
@@ -450,7 +449,8 @@ bot.on(message('voice'), async (ctx) => {
     await ctx.sendChatAction('typing');
     try {
         const voice = ctx.message.voice;
-        const audioPart = await getGeminiFilePart(voice.file_id, 'audio/ogg');
+        const audioBuffer = await fetchTelegramFile(voice.file_id);
+        const audioPart = await buildGeminiFilePart(audioBuffer, 'audio/ogg');
         const chat = defaultModel.startChat();
         const voicePrompt =
             buildContextPrompt('') +
@@ -480,19 +480,17 @@ bot.on(message('document'), async (ctx) => {
             return;
         }
 
-        const imagePart = await getGeminiFilePart(document.file_id, mimeType);
+        const fileBuffer = await fetchTelegramFile(document.file_id);
+        const imagePart = await buildGeminiFilePart(fileBuffer, mimeType);
         const userCaption = ctx.message.caption || '';
 
         if (mimeType.startsWith('image/') && !isFinancialDocumentCaption(userCaption)) {
             const { prompt, useHeavyModel } = getPhotoPrompt(userCaption);
             const fullPrompt = buildContextPrompt(userCaption) + '\n' + prompt;
-            const fileLink = await bot.telegram.getFileLink(document.file_id);
-            const fileResponse = await fetch(fileLink.href);
-            const photoBuffer = Buffer.from(await fileResponse.arrayBuffer());
 
             await runPhotoChatTurn(ctx, [imagePart, fullPrompt], useHeavyModel, {
                 photoFileId: document.file_id,
-                photoBuffer,
+                photoBuffer: fileBuffer,
                 photoMimeType: mimeType,
                 userCaption,
             });
@@ -516,14 +514,22 @@ bot.on(message('document'), async (ctx) => {
     }
 });
 
-async function getGeminiFilePart(fileId: string, mimeType: string) {
+async function fetchTelegramFile(fileId: string): Promise<Buffer> {
     const fileLink = await bot.telegram.getFileLink(fileId);
     const response = await fetch(fileLink.href);
-    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(await response.arrayBuffer());
+}
+
+async function buildGeminiFilePart(buffer: Buffer, mimeType: string) {
+    const { data, mimeType: outMime } = await resizeForGemini(
+        buffer,
+        mimeType,
+        GEMINI_IMAGE_MAX_PX
+    );
     return {
         inlineData: {
-            data: Buffer.from(arrayBuffer).toString('base64'),
-            mimeType: mimeType,
+            data,
+            mimeType: outMime,
         },
     };
 }
