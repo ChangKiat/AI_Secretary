@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { expenses, fixedExpenses } from '../db/schema';
 import { getExpenseCategories, resolveCategory } from '../config/expenseCategories';
+import { getReimbursementsByExpenseIds, getUnlinkedIncomeTotal } from './incomeService';
 
 function todayInKL(): Date {
     return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
@@ -82,16 +83,19 @@ export async function appendExpense(
     currency: string,
     category: string,
     description: string
-) {
+): Promise<number> {
     const db = requireDb();
-    await db.insert(expenses).values({
-        date: formatDateForDb(date),
-        amount: String(amount),
-        currency: currency || 'MYR',
-        category: resolveCategory(category),
-        description,
-    });
-    return true;
+    const [row] = await db
+        .insert(expenses)
+        .values({
+            date: formatDateForDb(date),
+            amount: String(amount),
+            currency: currency || 'MYR',
+            category: resolveCategory(category),
+            description,
+        })
+        .returning({ id: expenses.id });
+    return row.id;
 }
 
 export function formatExpenseLogReply(
@@ -99,10 +103,12 @@ export function formatExpenseLogReply(
     amount: number,
     currency: string,
     category: string,
-    description?: string
+    description?: string,
+    expenseId?: number
 ): string {
+    const header = expenseId != null ? `✅ Logged #${expenseId}` : '✅ Logged';
     const lines = [
-        '✅ Logged',
+        header,
         `📅 Date: ${date}`,
         `💵 Amount: ${currency || 'MYR'} ${amount}`,
         `📁 Category: ${resolveCategory(category)}`,
@@ -125,12 +131,20 @@ export async function getSpendingSummary(
     const effectiveEnd = endDate ?? budgetPeriod.periodEnd;
     const resolvedFilterCategory = category ? resolveCategory(category) : undefined;
 
+    const expenseIds = rows.map((r) => r.id);
+    const reimbursedByExpenseId = await getReimbursementsByExpenseIds(expenseIds);
+
+    let totalGross = 0;
     let totalSpent = 0;
+    let totalReimbursed = 0;
     const breakdown: Record<string, number> = {};
     const budgetSpent: Record<string, number> = {};
 
     for (const row of rows) {
         const canonicalCategory = resolveCategory(row.category);
+        const gross = parseFloat(row.amount);
+        const reimbursed = reimbursedByExpenseId.get(row.id) || 0;
+        const net = Math.max(0, gross - reimbursed);
         const summaryFilters = {
             resolvedCategory: resolvedFilterCategory,
             description,
@@ -139,9 +153,10 @@ export async function getSpendingSummary(
         };
 
         if (rowMatchesFilters(row, summaryFilters)) {
-            const amount = parseFloat(row.amount);
-            totalSpent += amount;
-            breakdown[canonicalCategory] = (breakdown[canonicalCategory] || 0) + amount;
+            totalGross += gross;
+            totalReimbursed += reimbursed;
+            totalSpent += net;
+            breakdown[canonicalCategory] = (breakdown[canonicalCategory] || 0) + net;
         }
 
         if (budgetPeriod.singleMonth) {
@@ -152,11 +167,12 @@ export async function getSpendingSummary(
                 endDate: budgetPeriod.periodEnd,
             };
             if (rowMatchesFilters(row, budgetFilters)) {
-                const amount = parseFloat(row.amount);
-                budgetSpent[canonicalCategory] = (budgetSpent[canonicalCategory] || 0) + amount;
+                budgetSpent[canonicalCategory] = (budgetSpent[canonicalCategory] || 0) + net;
             }
         }
     }
+
+    const totalIncome = await getUnlinkedIncomeTotal(effectiveStart, effectiveEnd);
 
     const budgetStatus = budgetPeriod.singleMonth
         ? getExpenseCategories().map(({ category: cat, monthlyBudget }) => {
@@ -173,6 +189,10 @@ export async function getSpendingSummary(
 
     return {
         total: totalSpent,
+        totalGross,
+        totalReimbursed,
+        totalIncome,
+        netCashflow: totalIncome - totalSpent,
         breakdown,
         budgetStatus,
         period: { startDate: budgetPeriod.periodStart, endDate: budgetPeriod.periodEnd },

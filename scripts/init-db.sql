@@ -30,6 +30,18 @@ INSERT INTO budgets (category, monthly_budget) VALUES
     ('Other', 1000)
 ON CONFLICT (category) DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS incomes (
+    id SERIAL PRIMARY KEY,
+    date TEXT NOT NULL,
+    amount NUMERIC(12, 2) NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'MYR',
+    category TEXT NOT NULL DEFAULT 'Other',
+    description TEXT NOT NULL,
+    source TEXT,
+    expense_id INTEGER REFERENCES expenses(id),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS fixed_expenses (
     id SERIAL PRIMARY KEY,
     day_of_month INTEGER NOT NULL,

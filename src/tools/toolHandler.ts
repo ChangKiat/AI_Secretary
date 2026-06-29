@@ -11,6 +11,13 @@ import {
     logBulkExpenses,
     formatExpenseLogReply,
 } from '../services/expenseService';
+import {
+    appendIncome,
+    appendReimbursements,
+    findRecentExpenseByDescription,
+    formatIncomeLogReply,
+    formatSharedExpenseReply,
+} from '../services/incomeService';
 import { createCalendarEvent, getSchedule } from '../services/calendarService';
 import {
     logWorkout,
@@ -48,6 +55,7 @@ export interface ToolCallOptions {
     isVoiceInput?: boolean;
     suppressWorkoutReply?: boolean;
     workoutBatchCollector?: WorkoutLogEntry[];
+    replyToExpenseId?: number;
 }
 function getUserId(ctx: Context): number {
     return ctx.from!.id;
@@ -155,14 +163,94 @@ export async function handleToolCall(
     const userId = getUserId(ctx);
 
     if (call.name === 'log_expense') {
-        const { date, amount, currency, category, description } = call.args as any;
+        const { date, amount, currency, category, description, reimbursements } = call.args as {
+            date?: string;
+            amount: number;
+            currency?: string;
+            category: string;
+            description: string;
+            reimbursements?: { source: string; amount: number }[];
+        };
         const resolvedDate = resolveLogDate(date, options);
-        await appendExpense(resolvedDate, amount, currency, category, description);
+        const resolvedCurrency = currency || 'MYR';
+        const resolvedCategory = resolveCategory(category);
+        const expenseId = await appendExpense(
+            resolvedDate,
+            amount,
+            resolvedCurrency,
+            resolvedCategory,
+            description
+        );
+        if (reimbursements?.length) {
+            await appendReimbursements(expenseId, reimbursements, resolvedDate);
+        }
         await chat.sendMessage([
             { functionResponse: { name: 'log_expense', response: { status: 'success' } } },
         ]);
+        if (reimbursements?.length) {
+            await ctx.reply(
+                formatSharedExpenseReply(
+                    resolvedDate,
+                    amount,
+                    resolvedCurrency,
+                    resolvedCategory,
+                    description,
+                    reimbursements,
+                    expenseId
+                )
+            );
+        } else {
+            await ctx.reply(
+                formatExpenseLogReply(
+                    resolvedDate,
+                    amount,
+                    resolvedCurrency,
+                    resolvedCategory,
+                    description,
+                    expenseId
+                )
+            );
+        }
+        return 'complete';
+    } else if (call.name === 'log_income') {
+        const args = call.args as {
+            date?: string;
+            amount: number;
+            currency?: string;
+            category: string;
+            description: string;
+            source?: string;
+            relatedExpenseDescription?: string;
+        };
+        const resolvedDate = resolveLogDate(args.date, options);
+        const resolvedCurrency = args.currency || 'MYR';
+        let expenseId: number | undefined = options?.replyToExpenseId;
+        if (!expenseId && args.relatedExpenseDescription) {
+            const found = await findRecentExpenseByDescription(args.relatedExpenseDescription);
+            if (found) expenseId = found;
+        }
+        await appendIncome(
+            resolvedDate,
+            args.amount,
+            resolvedCurrency,
+            args.category,
+            args.description,
+            args.source,
+            expenseId
+        );
+        await chat.sendMessage([
+            { functionResponse: { name: 'log_income', response: { status: 'success' } } },
+        ]);
         await ctx.reply(
-            formatExpenseLogReply(resolvedDate, amount, currency || 'MYR', category, description)
+            formatIncomeLogReply(
+                resolvedDate,
+                args.amount,
+                resolvedCurrency,
+                args.category,
+                args.description,
+                args.source,
+                expenseId != null
+            )
         );
         return 'complete';
     } else if (call.name === 'get_spending_summary') {

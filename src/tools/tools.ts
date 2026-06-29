@@ -10,11 +10,11 @@ function buildLogExpenseDeclaration(): FunctionDeclaration {
     return {
         name: 'log_expense',
         description:
-            'Logs a SINGLE expense from a standard receipt or text message. DO NOT use this tool if the user uploads a bank statement, credit card statement, or list of multiple expenses. Use log_bulk_expenses instead.',
+            'Logs a SINGLE expense from a standard receipt or text message. Use reimbursements when others paid you back for a shared bill (e.g. dinner RM57, A paid 20, B paid 20). DO NOT use this tool if the user uploads a bank statement, credit card statement, or list of multiple expenses. Use log_bulk_expenses instead.',
         parameters: {
             type: SchemaType.OBJECT,
             properties: {
-                amount: { type: SchemaType.NUMBER, description: 'The cost or amount spent.' },
+                amount: { type: SchemaType.NUMBER, description: 'The cost or amount spent (gross amount you paid).' },
                 currency: { type: SchemaType.STRING, description: 'The currency code, e.g., MYR or USD.' },
                 category: categoryParam(),
                 description: { type: SchemaType.STRING, description: 'Brief description of what was purchased.' },
@@ -23,8 +23,52 @@ function buildLogExpenseDeclaration(): FunctionDeclaration {
                     description:
                         'Format: YYYY-MM-DD. MUST be the exact date the transaction occurred. Look at the receipt date to determine the correct year. NEVER use the current system date.',
                 },
+                reimbursements: {
+                    type: SchemaType.ARRAY,
+                    description:
+                        'Optional. People who reimbursed you for this expense. Each entry reduces your net cost.',
+                    items: {
+                        type: SchemaType.OBJECT,
+                        properties: {
+                            source: { type: SchemaType.STRING, description: 'Person name, e.g. A, B, Mom.' },
+                            amount: { type: SchemaType.NUMBER, description: 'Amount they paid you back.' },
+                        },
+                        required: ['source', 'amount'],
+                    },
+                },
             },
             required: ['amount', 'currency', 'category', 'description'],
+        },
+    };
+}
+
+function buildLogIncomeDeclaration(): FunctionDeclaration {
+    return {
+        name: 'log_income',
+        description:
+            'Logs money received: medical claims, OT claims, salary, or transfers from people. For late bill reimbursements, use relatedExpenseDescription to link to the original expense.',
+        parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+                amount: { type: SchemaType.NUMBER, description: 'Amount received.' },
+                currency: { type: SchemaType.STRING, description: 'Currency code, e.g. MYR.' },
+                category: {
+                    type: SchemaType.STRING,
+                    description: 'Claim (medical/OT/reimbursement from employer), Transfer (person sent money), Salary, or Other.',
+                },
+                description: { type: SchemaType.STRING, description: 'Brief description, e.g. Medical claim, OT claim.' },
+                source: { type: SchemaType.STRING, description: 'Optional person or payer name.' },
+                date: {
+                    type: SchemaType.STRING,
+                    description: 'YYYY-MM-DD when money was received. Default today if omitted.',
+                },
+                relatedExpenseDescription: {
+                    type: SchemaType.STRING,
+                    description:
+                        'Optional. Keyword to match a prior expense (e.g. "dinner") when this is a bill reimbursement.',
+                },
+            },
+            required: ['amount', 'category', 'description'],
         },
     };
 }
@@ -33,7 +77,7 @@ function buildGetSummaryDeclaration(): FunctionDeclaration {
     return {
         name: 'get_spending_summary',
         description:
-            'Retrieves total spending, category breakdown, and budget vs spent per category. Defaults to current month. Can filter by category, description, and date range.',
+            'Retrieves total spending (net after reimbursements), gross spent, reimbursements, income received, category breakdown, and budget vs net spent per category. Defaults to current month.',
         parameters: {
             type: SchemaType.OBJECT,
             properties: {
@@ -386,6 +430,7 @@ export const updateUserSettingsDeclaration: FunctionDeclaration = {
 export function getAllFunctionDeclarations(): FunctionDeclaration[] {
     return [
         buildLogExpenseDeclaration(),
+        buildLogIncomeDeclaration(),
         buildGetSummaryDeclaration(),
         buildAddFixedExpenseDeclaration(),
         updateFixedExpenseDeclaration,

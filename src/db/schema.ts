@@ -10,6 +10,18 @@ export const expenses = pgTable('expenses', {
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+export const incomes = pgTable('incomes', {
+    id: serial('id').primaryKey(),
+    date: text('date').notNull(),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    currency: text('currency').default('MYR').notNull(),
+    category: text('category').default('Other').notNull(),
+    description: text('description').notNull(),
+    source: text('source'),
+    expenseId: integer('expense_id').references(() => expenses.id),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 export const budgets = pgTable('budgets', {
     id: serial('id').primaryKey(),
     category: text('category').notNull().unique(),

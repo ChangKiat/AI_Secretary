@@ -13,6 +13,7 @@ import {
 } from './config/gemini';
 import { loadExpenseCategories } from './config/expenseCategories';
 import { updateProteinTarget, updateNutritionTargets } from './services/nutritionService';
+import { resolveReplyToExpenseId } from './services/incomeService';
 import { parseMaxPx, resizeForGemini } from './utils/imageForGemini';
 import cron from 'node-cron';
 
@@ -146,6 +147,28 @@ function buildContextPrompt(userMessage: string): string {
         ACTION: Use the appropriate tool for finances, calendar, gym, or nutrition. DO NOT JUST CHAT when an action is requested.
 
         [MESSAGE]: ${userMessage}`;
+}
+
+function getReplyToText(ctx: import('telegraf').Context): string | undefined {
+    const msg = ctx.message;
+    if (!msg || !('reply_to_message' in msg) || !msg.reply_to_message) return undefined;
+    const replied = msg.reply_to_message;
+    if ('text' in replied && replied.text) return replied.text;
+    return undefined;
+}
+
+async function buildReplyExpenseContext(ctx: import('telegraf').Context): Promise<{
+    replyToExpenseId?: number;
+    promptHint: string;
+}> {
+    const replyText = getReplyToText(ctx);
+    if (!replyText) return { promptHint: '' };
+    const expenseId = await resolveReplyToExpenseId(replyText);
+    if (!expenseId) return { promptHint: '' };
+    return {
+        replyToExpenseId: expenseId,
+        promptHint: `\n[REPLY CONTEXT] User is replying to expense #${expenseId}. Link any reimbursement via log_income to this expense.`,
+    };
 }
 
 const GYM_KEYWORDS =
@@ -401,8 +424,17 @@ bot.on(message('text'), async (ctx) => {
 
     try {
         const session = getOrCreateSession(userId);
-        const prompt = buildContextPrompt(userMessage) + getTextFoodPrompt(userMessage);
-        await runChatTurn(session.chat, ctx, prompt, userId, undefined, true);
+        const replyCtx = await buildReplyExpenseContext(ctx);
+        const prompt =
+            buildContextPrompt(userMessage) + replyCtx.promptHint + getTextFoodPrompt(userMessage);
+        await runChatTurn(
+            session.chat,
+            ctx,
+            prompt,
+            userId,
+            { replyToExpenseId: replyCtx.replyToExpenseId },
+            true
+        );
     } catch (error: any) {
         console.error('Error:', error);
         if (error.message?.includes('429 Too Many Requests')) {
@@ -452,8 +484,10 @@ bot.on(message('voice'), async (ctx) => {
         const audioBuffer = await fetchTelegramFile(voice.file_id);
         const audioPart = await buildGeminiFilePart(audioBuffer, 'audio/ogg');
         const chat = defaultModel.startChat();
+        const replyCtx = await buildReplyExpenseContext(ctx);
         const voicePrompt =
             buildContextPrompt('') +
+            replyCtx.promptHint +
             '\nListen to this audio command and execute the appropriate tool. ' +
             `Use today's date from SYSTEM CONTEXT when logging meals or expenses unless the user specifies another date.`;
         await runChatTurn(
@@ -461,7 +495,7 @@ bot.on(message('voice'), async (ctx) => {
             ctx,
             [audioPart, voicePrompt],
             ctx.from.id,
-            { isVoiceInput: true }
+            { isVoiceInput: true, replyToExpenseId: replyCtx.replyToExpenseId }
         );
     } catch (error) {
         console.error('Error processing voice:', error);
