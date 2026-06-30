@@ -13,6 +13,30 @@ export interface WorkoutLogEntry {
     burn?: { caloriesBurned: number; fatBurnG: number } | null;
 }
 
+export interface WorkoutExerciseRecord {
+    id: number;
+    date: string;
+    exercise: string;
+    sets: number | null;
+    reps: number | null;
+    weightKg: number | null;
+    durationMin: number | null;
+    notes: string | null;
+    caloriesBurned: number | null;
+    fatBurnG: number | null;
+    sessionId: string | null;
+    sessionLabel: string | null;
+}
+
+export interface WorkoutSessionGroup {
+    sessionId: string;
+    sessionLabel: string | null;
+    date: string;
+    exercises: WorkoutExerciseRecord[];
+    totalCaloriesBurned: number;
+    totalFatBurnG: number;
+}
+
 function formatWorkoutDetail(entry: Pick<WorkoutLogEntry, 'sets' | 'reps' | 'weightKg' | 'durationMin'>): string {
     return [
         entry.sets && entry.reps ? `${entry.sets}x${entry.reps}` : entry.sets ? `${entry.sets} sets` : null,
@@ -25,6 +49,94 @@ function formatWorkoutDetail(entry: Pick<WorkoutLogEntry, 'sets' | 'reps' | 'wei
     ]
         .filter(Boolean)
         .join(' @ ');
+}
+
+export function applyWorkoutDefaults<T extends { sets?: number; reps?: number }>(
+    workout: T,
+    defaultSets?: number,
+    defaultReps?: number
+): T {
+    return {
+        ...workout,
+        sets: workout.sets ?? defaultSets,
+        reps: workout.reps ?? defaultReps,
+    };
+}
+
+function mapRowToExercise(row: typeof workouts.$inferSelect): WorkoutExerciseRecord {
+    return {
+        id: row.id,
+        date: row.date,
+        exercise: row.exercise,
+        sets: row.sets,
+        reps: row.reps,
+        weightKg: row.weightKg ? parseFloat(row.weightKg) : null,
+        durationMin: row.durationMin ? parseFloat(row.durationMin) : null,
+        notes: row.notes,
+        caloriesBurned: row.caloriesBurned ? parseFloat(row.caloriesBurned) : null,
+        fatBurnG: row.fatBurnedG ? parseFloat(row.fatBurnedG) : null,
+        sessionId: row.sessionId,
+        sessionLabel: row.sessionLabel,
+    };
+}
+
+function sumBurn(exercises: WorkoutExerciseRecord[]): { totalCaloriesBurned: number; totalFatBurnG: number } {
+    let totalCaloriesBurned = 0;
+    let totalFatBurnG = 0;
+    for (const ex of exercises) {
+        if (ex.caloriesBurned != null) totalCaloriesBurned += ex.caloriesBurned;
+        if (ex.fatBurnG != null) totalFatBurnG += ex.fatBurnG;
+    }
+    return {
+        totalCaloriesBurned: Math.round(totalCaloriesBurned),
+        totalFatBurnG: Math.round(totalFatBurnG * 10) / 10,
+    };
+}
+
+export function groupWorkoutsBySession(exercises: WorkoutExerciseRecord[]): {
+    sessions: WorkoutSessionGroup[];
+    standalone: WorkoutExerciseRecord[];
+} {
+    const sessionMap = new Map<string, WorkoutExerciseRecord[]>();
+    const standalone: WorkoutExerciseRecord[] = [];
+
+    for (const ex of exercises) {
+        if (ex.sessionId) {
+            const list = sessionMap.get(ex.sessionId) ?? [];
+            list.push(ex);
+            sessionMap.set(ex.sessionId, list);
+        } else {
+            standalone.push(ex);
+        }
+    }
+
+    const sessions: WorkoutSessionGroup[] = [];
+    for (const [sessionId, group] of sessionMap) {
+        const burn = sumBurn(group);
+        sessions.push({
+            sessionId,
+            sessionLabel: group.find((e) => e.sessionLabel)?.sessionLabel ?? null,
+            date: group[0].date,
+            exercises: group,
+            ...burn,
+        });
+    }
+
+    sessions.sort((a, b) => b.date.localeCompare(a.date) || b.sessionId.localeCompare(a.sessionId));
+    return { sessions, standalone };
+}
+
+export function countWorkoutSessions(exercises: WorkoutExerciseRecord[]): number {
+    const sessionIds = new Set<string>();
+    let count = 0;
+    for (const ex of exercises) {
+        if (ex.sessionId) {
+            sessionIds.add(ex.sessionId);
+        } else {
+            count++;
+        }
+    }
+    return count + sessionIds.size;
 }
 
 export function formatWorkoutLogReply(
@@ -57,10 +169,10 @@ export function formatWorkoutLogReply(
 export function formatBulkWorkoutLogReply(
     date: string,
     entries: WorkoutLogEntry[],
-    sessionNotes?: string
+    sessionLabel?: string
 ): string {
     const lines = ['✅ Logged', `📅 Date: ${date}`];
-    if (sessionNotes) lines.push(`📋 Session: ${sessionNotes}`);
+    if (sessionLabel) lines.push(`📋 Session: ${sessionLabel}`);
     lines.push('');
     for (const entry of entries) {
         const detail = formatWorkoutDetail(entry);
@@ -102,7 +214,9 @@ export async function logWorkout(
     durationMin?: number,
     notes?: string,
     caloriesBurned?: number | null,
-    fatBurnG?: number | null
+    fatBurnG?: number | null,
+    sessionId?: string | null,
+    sessionLabel?: string | null
 ) {
     const db = requireDb();
     const row = {
@@ -116,6 +230,8 @@ export async function logWorkout(
         notes: notes ?? null,
         caloriesBurned: caloriesBurned != null ? String(caloriesBurned) : null,
         fatBurnedG: fatBurnG != null ? String(fatBurnG) : null,
+        sessionId: sessionId ?? null,
+        sessionLabel: sessionLabel ?? null,
     };
     await db.insert(workouts).values(row);
 }
@@ -132,7 +248,9 @@ export async function logBulkWorkouts(
         notes?: string;
         caloriesBurned?: number | null;
         fatBurnG?: number | null;
-    }[]
+    }[],
+    sessionId?: string | null,
+    sessionLabel?: string | null
 ) {
     const db = requireDb();
     await db.insert(workouts).values(
@@ -147,6 +265,8 @@ export async function logBulkWorkouts(
             notes: w.notes ?? null,
             caloriesBurned: w.caloriesBurned != null ? String(w.caloriesBurned) : null,
             fatBurnedG: w.fatBurnG != null ? String(w.fatBurnG) : null,
+            sessionId: sessionId ?? null,
+            sessionLabel: sessionLabel ?? null,
         }))
     );
 }
@@ -156,7 +276,7 @@ export async function getWorkoutHistory(
     startDate?: string,
     endDate?: string,
     exercise?: string
-) {
+): Promise<WorkoutExerciseRecord[]> {
     const db = requireDb();
     const rows = await db
         .select()
@@ -172,18 +292,17 @@ export async function getWorkoutHistory(
                 return false;
             return true;
         })
-        .map((row) => ({
-            id: row.id,
-            date: row.date,
-            exercise: row.exercise,
-            sets: row.sets,
-            reps: row.reps,
-            weightKg: row.weightKg ? parseFloat(row.weightKg) : null,
-            durationMin: row.durationMin ? parseFloat(row.durationMin) : null,
-            notes: row.notes,
-            caloriesBurned: row.caloriesBurned ? parseFloat(row.caloriesBurned) : null,
-            fatBurnG: row.fatBurnedG ? parseFloat(row.fatBurnedG) : null,
-        }));
+        .map(mapRowToExercise);
+}
+
+export async function getWorkoutHistoryGrouped(
+    telegramUserId: number,
+    startDate?: string,
+    endDate?: string,
+    exercise?: string
+) {
+    const exercises = await getWorkoutHistory(telegramUserId, startDate, endDate, exercise);
+    return groupWorkoutsBySession(exercises);
 }
 
 export async function getWorkoutBurnSummary(
@@ -191,27 +310,31 @@ export async function getWorkoutBurnSummary(
     startDate: string,
     endDate: string
 ) {
-    const sessions = await getWorkoutHistory(telegramUserId, startDate, endDate);
+    const exercises = await getWorkoutHistory(telegramUserId, startDate, endDate);
+    const grouped = groupWorkoutsBySession(exercises);
 
     let totalCaloriesBurned = 0;
     let totalFatBurnG = 0;
     let sessionsWithBurn = 0;
 
-    for (const session of sessions) {
-        if (session.caloriesBurned != null) {
-            totalCaloriesBurned += session.caloriesBurned;
+    for (const ex of exercises) {
+        if (ex.caloriesBurned != null) {
+            totalCaloriesBurned += ex.caloriesBurned;
             sessionsWithBurn++;
         }
-        if (session.fatBurnG != null) {
-            totalFatBurnG += session.fatBurnG;
+        if (ex.fatBurnG != null) {
+            totalFatBurnG += ex.fatBurnG;
         }
     }
 
     return {
         startDate,
         endDate,
-        sessions,
-        sessionCount: sessions.length,
+        sessions: grouped.sessions,
+        standalone: grouped.standalone,
+        exercises,
+        sessionCount: countWorkoutSessions(exercises),
+        exerciseCount: exercises.length,
         sessionsWithBurn,
         totalCaloriesBurned: Math.round(totalCaloriesBurned),
         totalFatBurnG: Math.round(totalFatBurnG * 10) / 10,
@@ -231,6 +354,8 @@ export async function updateWorkout(
         notes?: string | null;
         caloriesBurned?: number | null;
         fatBurnG?: number | null;
+        sessionId?: string | null;
+        sessionLabel?: string | null;
     }
 ): Promise<boolean> {
     const db = requireDb();
@@ -254,6 +379,8 @@ export async function updateWorkout(
     if (fields.fatBurnG !== undefined) {
         set.fatBurnedG = fields.fatBurnG != null ? String(fields.fatBurnG) : null;
     }
+    if (fields.sessionId !== undefined) set.sessionId = fields.sessionId;
+    if (fields.sessionLabel !== undefined) set.sessionLabel = fields.sessionLabel;
 
     if (Object.keys(set).length === 0) return false;
 
@@ -292,4 +419,70 @@ export async function getRecentWorkoutsForSuggestion(
     }
 
     return { history, exerciseCounts, daysBack };
+}
+
+// ponytail self-check: defaults + session grouping without DB
+if (require.main === module) {
+    const withDefaults = applyWorkoutDefaults(
+        { exercise: 'Shoulder press', weightKg: 15 } as WorkoutLogEntry,
+        4,
+        12
+    );
+    if (withDefaults.sets !== 4 || withDefaults.reps !== 12) {
+        throw new Error('applyWorkoutDefaults failed');
+    }
+
+    const exercises: WorkoutExerciseRecord[] = [
+        {
+            id: 1,
+            date: '2026-06-29',
+            exercise: 'Shoulder press',
+            sets: 4,
+            reps: 12,
+            weightKg: 15,
+            durationMin: null,
+            notes: null,
+            caloriesBurned: 50,
+            fatBurnG: 5,
+            sessionId: 'sess-1',
+            sessionLabel: 'Shoulder + Abs day',
+        },
+        {
+            id: 2,
+            date: '2026-06-29',
+            exercise: 'Crunches',
+            sets: 4,
+            reps: 12,
+            weightKg: null,
+            durationMin: null,
+            notes: null,
+            caloriesBurned: 30,
+            fatBurnG: 3,
+            sessionId: 'sess-1',
+            sessionLabel: 'Shoulder + Abs day',
+        },
+        {
+            id: 3,
+            date: '2026-06-28',
+            exercise: 'Bench press',
+            sets: 3,
+            reps: 8,
+            weightKg: 60,
+            durationMin: null,
+            notes: null,
+            caloriesBurned: 40,
+            fatBurnG: 4,
+            sessionId: null,
+            sessionLabel: null,
+        },
+    ];
+
+    const grouped = groupWorkoutsBySession(exercises);
+    if (grouped.sessions.length !== 1 || grouped.standalone.length !== 1) {
+        throw new Error('groupWorkoutsBySession failed');
+    }
+    if (countWorkoutSessions(exercises) !== 2) {
+        throw new Error('countWorkoutSessions expected 2');
+    }
+    console.log('gymService self-check ok');
 }

@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS workouts (
     notes TEXT,
     calories_burned NUMERIC(8, 2),
     fat_burned_g NUMERIC(8, 2),
+    session_id TEXT,
+    session_label TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 

@@ -254,14 +254,26 @@ export const logWorkoutDeclaration: FunctionDeclaration = {
 export const logBulkWorkoutsDeclaration: FunctionDeclaration = {
     name: 'log_bulk_workouts',
     description:
-        'Logs multiple exercises from one workout session in a single call. Use when the user lists 2 or more exercises (leg day, push day, bullet list). Do NOT call log_workout repeatedly.',
+        'Logs multiple exercises from one workout session in a single call. Use when the user lists 2+ exercises with shared sets/reps and/or names the day (push day, shoulder + abs). Do NOT call log_workout repeatedly.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
             date: { type: SchemaType.STRING, description: 'YYYY-MM-DD for the session. Defaults to today.' },
+            sessionLabel: {
+                type: SchemaType.STRING,
+                description: 'Session name e.g. "Shoulder + Abs day", "Push day", "Leg workout".',
+            },
             sessionNotes: {
                 type: SchemaType.STRING,
-                description: 'Optional session label e.g. "Leg workout, 4 sets x 12 reps".',
+                description: 'Alias for sessionLabel (legacy).',
+            },
+            defaultSets: {
+                type: SchemaType.NUMBER,
+                description: 'Default sets for all exercises unless overridden per exercise.',
+            },
+            defaultReps: {
+                type: SchemaType.NUMBER,
+                description: 'Default reps per set for all exercises unless overridden per exercise.',
             },
             workouts: {
                 type: SchemaType.ARRAY,
@@ -287,7 +299,8 @@ export const logBulkWorkoutsDeclaration: FunctionDeclaration = {
 
 export const getWorkoutHistoryDeclaration: FunctionDeclaration = {
     name: 'get_workout_history',
-    description: 'Retrieves workout history for a date range or exercise filter.',
+    description:
+        'Retrieves workout history grouped by session (e.g. Shoulder + Abs day) plus standalone exercises. Optional date range or exercise filter.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {

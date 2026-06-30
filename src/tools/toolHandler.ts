@@ -1,4 +1,5 @@
 import { Context } from 'telegraf';
+import { randomUUID } from 'crypto';
 import { ChatSession, FunctionCall } from '@google/generative-ai';
 import { resolveCategory } from '../config/expenseCategories';
 import {
@@ -22,11 +23,12 @@ import { createCalendarEvent, getSchedule } from '../services/calendarService';
 import {
     logWorkout,
     logBulkWorkouts,
-    getWorkoutHistory,
+    getWorkoutHistoryGrouped,
     getRecentWorkoutsForSuggestion,
     getWorkoutBurnSummary,
     formatWorkoutLogReply,
     formatBulkWorkoutLogReply,
+    applyWorkoutDefaults,
     WorkoutLogEntry,
 } from '../services/gymService';
 import { estimateBurn } from '../services/burnCalculator';
@@ -55,6 +57,7 @@ export interface ToolCallOptions {
     isVoiceInput?: boolean;
     suppressWorkoutReply?: boolean;
     workoutBatchCollector?: WorkoutLogEntry[];
+    workoutBatchSessionId?: string;
     replyToExpenseId?: number;
 }
 function getUserId(ctx: Context): number {
@@ -136,7 +139,9 @@ async function processWorkoutLog(
     userId: number,
     args: WorkoutArgs,
     date: string,
-    bodyWeightKg: number | null
+    bodyWeightKg: number | null,
+    sessionId?: string | null,
+    sessionLabel?: string | null
 ): Promise<WorkoutLogEntry> {
     const entry = await buildWorkoutEntry(args, date, bodyWeightKg);
     await logWorkout(
@@ -149,7 +154,9 @@ async function processWorkoutLog(
         args.durationMin,
         args.notes,
         entry.burn?.caloriesBurned ?? null,
-        entry.burn?.fatBurnG ?? null
+        entry.burn?.fatBurnG ?? null,
+        sessionId,
+        sessionLabel
     );
     return entry;
 }
@@ -432,7 +439,13 @@ export async function handleToolCall(
         const args = call.args as WorkoutArgs;
         const date = resolveLogDate(args.date, options);
         const settings = await getNutritionTargets(userId);
-        const entry = await processWorkoutLog(userId, args, date, settings.bodyWeightKg);
+        const entry = await processWorkoutLog(
+            userId,
+            args,
+            date,
+            settings.bodyWeightKg,
+            options?.workoutBatchSessionId
+        );
 
         await chat.sendMessage([
             {
@@ -466,16 +479,22 @@ export async function handleToolCall(
     } else if (call.name === 'log_bulk_workouts') {
         const args = call.args as {
             date?: string;
+            sessionLabel?: string;
             sessionNotes?: string;
+            defaultSets?: number;
+            defaultReps?: number;
             workouts: WorkoutArgs[];
         };
         const date = resolveLogDate(args.date, options);
+        const sessionLabel = args.sessionLabel ?? args.sessionNotes;
+        const sessionId = randomUUID();
         const settings = await getNutritionTargets(userId);
         const entries: WorkoutLogEntry[] = [];
 
         for (const w of args.workouts) {
             const wDate = w.date ? resolveLogDate(w.date, options) : date;
-            entries.push(await buildWorkoutEntry(w, wDate, settings.bodyWeightKg));
+            const withDefaults = applyWorkoutDefaults(w, args.defaultSets, args.defaultReps);
+            entries.push(await buildWorkoutEntry(withDefaults, wDate, settings.bodyWeightKg));
         }
 
         await logBulkWorkouts(
@@ -490,7 +509,9 @@ export async function handleToolCall(
                 notes: entry.notes,
                 caloriesBurned: entry.burn?.caloriesBurned ?? null,
                 fatBurnG: entry.burn?.fatBurnG ?? null,
-            }))
+            })),
+            sessionId,
+            sessionLabel
         );
 
         let totalCal = 0;
@@ -516,7 +537,7 @@ export async function handleToolCall(
                 },
             },
         ]);
-        await ctx.reply(formatBulkWorkoutLogReply(date, entries, args.sessionNotes));
+        await ctx.reply(formatBulkWorkoutLogReply(date, entries, sessionLabel));
         return 'complete';
     } else if (call.name === 'get_workout_summary') {
         const args = call.args as { startDate: string; endDate: string };
@@ -528,14 +549,14 @@ export async function handleToolCall(
         return 'complete';
     } else if (call.name === 'get_workout_history') {
         const args = call.args as { startDate?: string; endDate?: string; exercise?: string };
-        const history = await getWorkoutHistory(
+        const history = await getWorkoutHistoryGrouped(
             userId,
             args.startDate,
             args.endDate,
             args.exercise
         );
         const toolResult = await chat.sendMessage([
-            { functionResponse: { name: 'get_workout_history', response: { workouts: history } } },
+            { functionResponse: { name: 'get_workout_history', response: history } },
         ]);
         await ctx.reply(toolResult.response.text());
         return 'complete';

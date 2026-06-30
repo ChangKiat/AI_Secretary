@@ -1,4 +1,5 @@
 import { Telegraf } from 'telegraf';
+import { randomUUID } from 'crypto';
 import { message } from 'telegraf/filters';
 import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
 import 'dotenv/config';
@@ -355,6 +356,7 @@ async function runChatTurn(
         const workoutCallCount = functionCalls.filter((c) => c.name === 'log_workout').length;
         const shouldBatchWorkouts = workoutCallCount > 1;
         const workoutBatchCollector: import('./services/gymService').WorkoutLogEntry[] = [];
+        const workoutBatchSessionId = shouldBatchWorkouts ? randomUUID() : undefined;
 
         for (const call of functionCalls) {
             const callOptions =
@@ -363,6 +365,7 @@ async function runChatTurn(
                           ...toolOptions,
                           suppressWorkoutReply: true,
                           workoutBatchCollector,
+                          workoutBatchSessionId,
                       }
                     : toolOptions;
             const toolResult = await handleToolCall(call, chat, ctx, callOptions);

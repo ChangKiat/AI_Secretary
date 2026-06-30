@@ -54,6 +54,8 @@ export const workouts = pgTable('workouts', {
     notes: text('notes'),
     caloriesBurned: numeric('calories_burned', { precision: 8, scale: 2 }),
     fatBurnedG: numeric('fat_burned_g', { precision: 8, scale: 2 }),
+    sessionId: text('session_id'),
+    sessionLabel: text('session_label'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
