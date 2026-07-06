@@ -1,5 +1,6 @@
 import { FunctionDeclaration, SchemaType } from '@google/generative-ai';
 import { getExpenseCategoryDescription } from '../config/expenseCategories';
+import { getPaymentMethodDescription } from '../config/paymentMethods';
 
 function categoryParam(prefix = ''): { type: SchemaType.STRING; description: string } {
     const base = getExpenseCategoryDescription();
@@ -36,6 +37,10 @@ function buildLogExpenseDeclaration(): FunctionDeclaration {
                         required: ['source', 'amount'],
                     },
                 },
+                paymentMethod: {
+                    type: SchemaType.STRING,
+                    description: getPaymentMethodDescription(),
+                },
             },
             required: ['amount', 'currency', 'category', 'description'],
         },
@@ -46,7 +51,7 @@ function buildLogIncomeDeclaration(): FunctionDeclaration {
     return {
         name: 'log_income',
         description:
-            'Logs money received: medical claims, OT claims, salary, or transfers from people. For late bill reimbursements, use relatedExpenseDescription to link to the original expense.',
+            'Logs money received: medical claims, OT claims, salary, transfers from people, or moves between your accounts (Account transfer). For late bill reimbursements, use relatedExpenseDescription to link to the original expense.',
         parameters: {
             type: SchemaType.OBJECT,
             properties: {
@@ -54,7 +59,8 @@ function buildLogIncomeDeclaration(): FunctionDeclaration {
                 currency: { type: SchemaType.STRING, description: 'Currency code, e.g. MYR.' },
                 category: {
                     type: SchemaType.STRING,
-                    description: 'Claim (medical/OT/reimbursement from employer), Transfer (person sent money), Salary, or Other.',
+                    description:
+                        'Claim (medical/OT/reimbursement from employer), Transfer (person sent money), Salary, Account transfer (move between your accounts), or Other.',
                 },
                 description: { type: SchemaType.STRING, description: 'Brief description, e.g. Medical claim, OT claim.' },
                 source: { type: SchemaType.STRING, description: 'Optional person or payer name.' },
@@ -67,6 +73,15 @@ function buildLogIncomeDeclaration(): FunctionDeclaration {
                     description:
                         'Optional. Keyword to match a prior expense (e.g. "dinner") when this is a bill reimbursement.',
                 },
+                paymentMethod: {
+                    type: SchemaType.STRING,
+                    description: `To account (destination). ${getPaymentMethodDescription()}`,
+                },
+                fromPaymentMethod: {
+                    type: SchemaType.STRING,
+                    description:
+                        'From account (source). Required for Account transfer category when moving between accounts.',
+                },
             },
             required: ['amount', 'category', 'description'],
         },
@@ -77,12 +92,16 @@ function buildGetSummaryDeclaration(): FunctionDeclaration {
     return {
         name: 'get_spending_summary',
         description:
-            'Retrieves total spending (net after reimbursements), gross spent, reimbursements, income received, category breakdown, and budget vs net spent per category. Defaults to current month.',
+            'Retrieves total spending (net after reimbursements), gross spent, reimbursements, income received, category breakdown, breakdownByPaymentMethod, and budget vs net spent per category. Defaults to current month.',
         parameters: {
             type: SchemaType.OBJECT,
             properties: {
                 category: categoryParam('Optional filter.'),
                 description: { type: SchemaType.STRING, description: 'Optional. A specific keyword like "coffee".' },
+                paymentMethod: {
+                    type: SchemaType.STRING,
+                    description: `Optional filter. ${getPaymentMethodDescription()}`,
+                },
                 startDate: { type: SchemaType.STRING, description: 'Optional. YYYY-MM-DD' },
                 endDate: { type: SchemaType.STRING, description: 'Optional. YYYY-MM-DD' },
             },
@@ -109,6 +128,10 @@ function buildAddFixedExpenseDeclaration(): FunctionDeclaration {
                 category: categoryParam( 'Recurring bill category. Use Loan, Insurance, Utility, or Investment for bills.'
                 ),
                 description: { type: SchemaType.STRING, description: 'Auto-generate a brief description.' },
+                paymentMethod: {
+                    type: SchemaType.STRING,
+                    description: getPaymentMethodDescription(),
+                },
             },
             required: ['dayOfMonth', 'amount'],
         },
@@ -137,6 +160,10 @@ function buildLogBulkExpensesDeclaration(): FunctionDeclaration {
                                 type: SchemaType.STRING,
                                 description:
                                     "Format: YYYY-MM-DD. MUST be the exact date the transaction occurred. Look at the statement's billing period or statement date to determine the correct year. NEVER use the current system date.",
+                            },
+                            paymentMethod: {
+                                type: SchemaType.STRING,
+                                description: getPaymentMethodDescription(),
                             },
                         },
                         required: ['amount', 'currency', 'category', 'description'],

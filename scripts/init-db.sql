@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     currency TEXT NOT NULL DEFAULT 'MYR',
     category TEXT NOT NULL DEFAULT 'Other',
     description TEXT NOT NULL,
+    payment_method TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -39,6 +40,8 @@ CREATE TABLE IF NOT EXISTS incomes (
     description TEXT NOT NULL,
     source TEXT,
     expense_id INTEGER REFERENCES expenses(id),
+    payment_method TEXT,
+    from_payment_method TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -52,8 +55,29 @@ CREATE TABLE IF NOT EXISTS fixed_expenses (
     description TEXT NOT NULL,
     start_month INTEGER NOT NULL,
     active BOOLEAN NOT NULL DEFAULT TRUE,
+    payment_method TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS payment_accounts (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    account_type TEXT NOT NULL DEFAULT 'account',
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO payment_accounts (name, account_type) VALUES
+    ('TnG', 'account'),
+    ('CIMB', 'account'),
+    ('GrabPay', 'account'),
+    ('ShopeePay', 'account'),
+    ('Cash', 'account'),
+    ('Maybank', 'account'),
+    ('Public Bank', 'account'),
+    ('UOB', 'account'),
+    ('Credit Card', 'credit')
+ON CONFLICT (name) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS workouts (
     id SERIAL PRIMARY KEY,

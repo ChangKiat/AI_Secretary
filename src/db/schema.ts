@@ -7,6 +7,7 @@ export const expenses = pgTable('expenses', {
     currency: text('currency').default('MYR').notNull(),
     category: text('category').default('Other').notNull(),
     description: text('description').notNull(),
+    paymentMethod: text('payment_method'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -19,6 +20,8 @@ export const incomes = pgTable('incomes', {
     description: text('description').notNull(),
     source: text('source'),
     expenseId: integer('expense_id').references(() => expenses.id),
+    paymentMethod: text('payment_method'),
+    fromPaymentMethod: text('from_payment_method'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -38,6 +41,15 @@ export const fixedExpenses = pgTable('fixed_expenses', {
     category: text('category').default('Other').notNull(),
     description: text('description').notNull(),
     startMonth: integer('start_month').notNull(),
+    active: boolean('active').default(true).notNull(),
+    paymentMethod: text('payment_method'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const paymentAccounts = pgTable('payment_accounts', {
+    id: serial('id').primaryKey(),
+    name: text('name').notNull().unique(),
+    accountType: text('account_type').default('account').notNull(),
     active: boolean('active').default(true).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });

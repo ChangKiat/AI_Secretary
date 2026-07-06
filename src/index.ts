@@ -13,6 +13,7 @@ import {
     GEMINI_MODEL_HEAVY,
 } from './config/gemini';
 import { loadExpenseCategories } from './config/expenseCategories';
+import { loadPaymentAccounts } from './config/paymentMethods';
 import { updateProteinTarget, updateNutritionTargets } from './services/nutritionService';
 import { resolveReplyToExpenseId } from './services/incomeService';
 import { parseMaxPx, resizeForGemini } from './utils/imageForGemini';
@@ -85,6 +86,7 @@ bot.command('settargets', async (ctx) => {
 
 async function main() {
     await loadExpenseCategories();
+    await loadPaymentAccounts();
     defaultModel = createGeminiModel(genAI, GEMINI_MODEL_DEFAULT);
     heavyModel = createGeminiModel(genAI, GEMINI_MODEL_HEAVY);
 
@@ -104,9 +106,11 @@ async function main() {
                         exp.amount,
                         exp.currency,
                         exp.category,
-                        exp.description
+                        exp.description,
+                        exp.paymentMethod
                     );
-                    loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount})`;
+                    const via = exp.paymentMethod ? ` via ${exp.paymentMethod}` : '';
+                    loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount}${via})`;
                 }
 
                 const msg = `🗓️ *Automated Billing:* Good morning! I just logged today's scheduled expenses:${loggedList}`;

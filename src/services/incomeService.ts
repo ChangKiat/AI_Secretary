@@ -1,8 +1,9 @@
 import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
+import { resolvePaymentMethod } from '../config/paymentMethods';
 import { requireDb } from '../db/client';
 import { expenses, incomes } from '../db/schema';
 
-const INCOME_CATEGORIES = ['Claim', 'Transfer', 'Salary', 'Other'] as const;
+const INCOME_CATEGORIES = ['Claim', 'Transfer', 'Salary', 'Account transfer', 'Other'] as const;
 export type IncomeCategory = (typeof INCOME_CATEGORIES)[number];
 
 function todayInKL(): string {
@@ -23,6 +24,47 @@ export function resolveIncomeCategory(category: string): IncomeCategory {
     return match ?? 'Other';
 }
 
+export function isAccountTransferCategory(category: string): boolean {
+    return resolveIncomeCategory(category) === 'Account transfer';
+}
+
+export function validateIncomePaymentAccounts(
+    category: string,
+    paymentMethod?: string | null,
+    fromPaymentMethod?: string | null
+): string | null {
+    if (!isAccountTransferCategory(category)) return null;
+
+    const to = paymentMethod ? resolvePaymentMethod(paymentMethod) : null;
+    const from = fromPaymentMethod ? resolvePaymentMethod(fromPaymentMethod) : null;
+    if (!to || !from) {
+        return 'Account transfer requires from and to accounts';
+    }
+    if (to === from) {
+        return 'From and to accounts must be different';
+    }
+    return null;
+}
+
+function normalizeIncomePaymentFields(
+    category: string,
+    paymentMethod?: string | null,
+    fromPaymentMethod?: string | null
+): { paymentMethod: string | null; fromPaymentMethod: string | null } {
+    const to = paymentMethod != null ? resolvePaymentMethod(paymentMethod) : null;
+    if (isAccountTransferCategory(category)) {
+        return {
+            paymentMethod: to,
+            fromPaymentMethod:
+                fromPaymentMethod != null ? resolvePaymentMethod(fromPaymentMethod) : null,
+        };
+    }
+    return {
+        paymentMethod: to,
+        fromPaymentMethod: null,
+    };
+}
+
 export async function appendIncome(
     date: string | undefined,
     amount: number,
@@ -30,8 +72,22 @@ export async function appendIncome(
     category: string,
     description: string,
     source?: string,
-    expenseId?: number
+    expenseId?: number,
+    paymentMethod?: string | null,
+    fromPaymentMethod?: string | null
 ): Promise<number> {
+    const resolvedCategory = resolveIncomeCategory(category);
+    const validationError = validateIncomePaymentAccounts(
+        resolvedCategory,
+        paymentMethod,
+        fromPaymentMethod
+    );
+    if (validationError) throw new Error(validationError);
+    if (isAccountTransferCategory(resolvedCategory) && expenseId != null) {
+        throw new Error('Account transfer cannot be linked to an expense');
+    }
+
+    const accounts = normalizeIncomePaymentFields(resolvedCategory, paymentMethod, fromPaymentMethod);
     const db = requireDb();
     const [row] = await db
         .insert(incomes)
@@ -39,10 +95,12 @@ export async function appendIncome(
             date: formatDateForDb(date),
             amount: String(amount),
             currency: currency || 'MYR',
-            category: resolveIncomeCategory(category),
+            category: resolvedCategory,
             description,
             source: source || null,
-            expenseId: expenseId ?? null,
+            expenseId: isAccountTransferCategory(resolvedCategory) ? null : (expenseId ?? null),
+            paymentMethod: accounts.paymentMethod,
+            fromPaymentMethod: accounts.fromPaymentMethod,
         })
         .returning({ id: incomes.id });
     return row.id;
@@ -152,18 +210,62 @@ export async function updateIncome(
         description?: string;
         source?: string | null;
         expenseId?: number | null;
+        paymentMethod?: string | null;
+        fromPaymentMethod?: string | null;
     }
 ): Promise<boolean> {
     const db = requireDb();
+    const existing = await db.select().from(incomes).where(eq(incomes.id, id));
+    const current = existing[0];
+    if (!current) return false;
+
+    const nextCategory =
+        fields.category != null ? resolveIncomeCategory(fields.category) : current.category;
+    const nextPaymentMethod =
+        fields.paymentMethod !== undefined
+            ? fields.paymentMethod != null
+                ? resolvePaymentMethod(fields.paymentMethod)
+                : null
+            : current.paymentMethod;
+    const nextFromPaymentMethod =
+        fields.fromPaymentMethod !== undefined
+            ? fields.fromPaymentMethod != null
+                ? resolvePaymentMethod(fields.fromPaymentMethod)
+                : null
+            : current.fromPaymentMethod;
+
+    const validationError = validateIncomePaymentAccounts(
+        nextCategory,
+        nextPaymentMethod,
+        isAccountTransferCategory(nextCategory) ? nextFromPaymentMethod : null
+    );
+    if (validationError) throw new Error(validationError);
+
     const set: Record<string, string | number | null> = {};
 
     if (fields.date != null) set.date = fields.date;
     if (fields.amount != null) set.amount = String(fields.amount);
     if (fields.currency != null) set.currency = fields.currency;
-    if (fields.category != null) set.category = resolveIncomeCategory(fields.category);
+    if (fields.category != null) set.category = nextCategory;
     if (fields.description != null) set.description = fields.description;
     if (fields.source !== undefined) set.source = fields.source;
-    if (fields.expenseId !== undefined) set.expenseId = fields.expenseId;
+
+    if (fields.category != null && isAccountTransferCategory(nextCategory)) {
+        set.expenseId = null;
+    } else if (fields.expenseId !== undefined) {
+        set.expenseId = fields.expenseId;
+    }
+
+    if (fields.paymentMethod !== undefined || fields.category != null) {
+        set.paymentMethod = isAccountTransferCategory(nextCategory)
+            ? nextPaymentMethod
+            : nextPaymentMethod;
+    }
+    if (fields.fromPaymentMethod !== undefined || fields.category != null) {
+        set.fromPaymentMethod = isAccountTransferCategory(nextCategory)
+            ? nextFromPaymentMethod
+            : null;
+    }
 
     if (Object.keys(set).length === 0) return false;
 
@@ -184,10 +286,23 @@ export async function getUnlinkedIncomeTotal(startDate: string, endDate: string)
     let total = 0;
     for (const row of rows) {
         if (row.expenseId != null) continue;
+        if (row.category === 'Account transfer') continue;
         if (row.date < startDate || row.date > endDate) continue;
         total += parseFloat(row.amount);
     }
     return total;
+}
+
+export function formatIncomeAccountFlow(
+    paymentMethod?: string | null,
+    fromPaymentMethod?: string | null
+): string | null {
+    if (fromPaymentMethod && paymentMethod) {
+        return `${fromPaymentMethod} → ${paymentMethod}`;
+    }
+    if (paymentMethod) return `→ ${paymentMethod}`;
+    if (fromPaymentMethod) return `${fromPaymentMethod} →`;
+    return null;
 }
 
 export function formatIncomeLogReply(
@@ -197,7 +312,9 @@ export function formatIncomeLogReply(
     category: string,
     description: string,
     source?: string,
-    linkedExpense?: boolean
+    linkedExpense?: boolean,
+    paymentMethod?: string | null,
+    fromPaymentMethod?: string | null
 ): string {
     const lines = [
         '✅ Logged income',
@@ -207,6 +324,8 @@ export function formatIncomeLogReply(
         `📝 Description: ${description}`,
     ];
     if (source) lines.push(`👤 From: ${source}`);
+    const accountFlow = formatIncomeAccountFlow(paymentMethod, fromPaymentMethod);
+    if (accountFlow) lines.push(`💳 Accounts: ${accountFlow}`);
     if (linkedExpense) lines.push('🔗 Linked to expense (reduces your net cost)');
     return lines.join('\n');
 }
@@ -218,18 +337,23 @@ export function formatSharedExpenseReply(
     category: string,
     description: string,
     reimbursements: { source: string; amount: number }[],
-    expenseId?: number
+    expenseId?: number,
+    paymentMethod?: string | null
 ): string {
     const reimbursed = reimbursements.reduce((s, r) => s + r.amount, 0);
     const net = gross - reimbursed;
     const reimbLine = reimbursements.map((r) => `${r.source} ${currency} ${r.amount}`).join(', ');
     const header = expenseId != null ? `✅ Logged expense #${expenseId}` : '✅ Logged expense';
-    return [
+    const lines = [
         header,
         `📅 ${date} | 💵 ${currency} ${gross} | ${category} | ${description}`,
+    ];
+    if (paymentMethod) lines.push(`💳 Paid via: ${paymentMethod}`);
+    lines.push(
         `👥 Reimbursed: ${reimbLine} (${currency} ${reimbursed} total)`,
-        `💰 Your share: ${currency} ${net}`,
-    ].join('\n');
+        `💰 Your share: ${currency} ${net}`
+    );
+    return lines.join('\n');
 }
 
 // ponytail self-check: net math for shared bill
@@ -244,5 +368,8 @@ if (require.main === module) {
     if (!reply.includes('#57')) throw new Error('shared expense reply missing id');
     const parsed = parseExpenseIdFromBotReply('✅ Logged #57\n📅 Date: 2026-06-29');
     if (parsed !== 57) throw new Error(`expected parsed id 57, got ${parsed}`);
+    if (validateIncomePaymentAccounts('Account transfer', 'TnG', null)) {
+        throw new Error('account transfer validation should fail without from');
+    }
     console.log('incomeService self-check ok');
 }

@@ -2,6 +2,7 @@ import { Context } from 'telegraf';
 import { randomUUID } from 'crypto';
 import { ChatSession, FunctionCall } from '@google/generative-ai';
 import { resolveCategory } from '../config/expenseCategories';
+import { resolvePaymentMethod } from '../config/paymentMethods';
 import {
     appendExpense,
     getSpendingSummary,
@@ -170,23 +171,27 @@ export async function handleToolCall(
     const userId = getUserId(ctx);
 
     if (call.name === 'log_expense') {
-        const { date, amount, currency, category, description, reimbursements } = call.args as {
+        const { date, amount, currency, category, description, reimbursements, paymentMethod } =
+            call.args as {
             date?: string;
             amount: number;
             currency?: string;
             category: string;
             description: string;
+            paymentMethod?: string;
             reimbursements?: { source: string; amount: number }[];
         };
         const resolvedDate = resolveLogDate(date, options);
         const resolvedCurrency = currency || 'MYR';
         const resolvedCategory = resolveCategory(category);
+        const resolvedPaymentMethod = resolvePaymentMethod(paymentMethod);
         const expenseId = await appendExpense(
             resolvedDate,
             amount,
             resolvedCurrency,
             resolvedCategory,
-            description
+            description,
+            resolvedPaymentMethod
         );
         if (reimbursements?.length) {
             await appendReimbursements(expenseId, reimbursements, resolvedDate);
@@ -203,7 +208,8 @@ export async function handleToolCall(
                     resolvedCategory,
                     description,
                     reimbursements,
-                    expenseId
+                    expenseId,
+                    resolvedPaymentMethod
                 )
             );
         } else {
@@ -214,7 +220,8 @@ export async function handleToolCall(
                     resolvedCurrency,
                     resolvedCategory,
                     description,
-                    expenseId
+                    expenseId,
+                    resolvedPaymentMethod
                 )
             );
         }
@@ -228,6 +235,8 @@ export async function handleToolCall(
             description: string;
             source?: string;
             relatedExpenseDescription?: string;
+            paymentMethod?: string;
+            fromPaymentMethod?: string;
         };
         const resolvedDate = resolveLogDate(args.date, options);
         const resolvedCurrency = args.currency || 'MYR';
@@ -243,7 +252,9 @@ export async function handleToolCall(
             args.category,
             args.description,
             args.source,
-            expenseId
+            expenseId,
+            args.paymentMethod,
+            args.fromPaymentMethod
         );
         await chat.sendMessage([
             { functionResponse: { name: 'log_income', response: { status: 'success' } } },
@@ -256,7 +267,9 @@ export async function handleToolCall(
                 args.category,
                 args.description,
                 args.source,
-                expenseId != null
+                expenseId != null,
+                args.paymentMethod,
+                args.fromPaymentMethod
             )
         );
         return 'complete';
@@ -264,6 +277,7 @@ export async function handleToolCall(
         const args = call.args as {
             category?: string;
             description?: string;
+            paymentMethod?: string;
             startDate?: string;
             endDate?: string;
         };
@@ -271,7 +285,8 @@ export async function handleToolCall(
             args.category,
             args.description,
             args.startDate,
-            args.endDate
+            args.endDate,
+            args.paymentMethod
         );
         const toolResult = await chat.sendMessage([
             { functionResponse: { name: 'get_spending_summary', response: summaryData } },
@@ -286,6 +301,7 @@ export async function handleToolCall(
             currency?: string;
             category?: string;
             description?: string;
+            paymentMethod?: string;
         };
         const finalDay = args.dayOfMonth || 1;
         const frequency = args.frequencyInMonths || 1;
@@ -298,6 +314,7 @@ export async function handleToolCall(
         const currency = args.currency || 'MYR';
         const category = resolveCategory(args.category);
         const description = args.description || `Recurring ${category}`;
+        const paymentMethod = resolvePaymentMethod(args.paymentMethod);
 
         await addFixedExpense(
             finalDay,
@@ -306,7 +323,8 @@ export async function handleToolCall(
             category,
             description,
             frequency,
-            startMonth
+            startMonth,
+            paymentMethod
         );
         await chat.sendMessage([
             { functionResponse: { name: 'add_fixed_expense', response: { status: 'success' } } },
@@ -318,7 +336,8 @@ export async function handleToolCall(
         if (frequency === 12) freqWord = 'yearly';
 
         await ctx.reply(
-            `🔄 Done! I've set up a ${freqWord} rule to log ${currency} ${args.amount} for ${description} on the ${finalDay} of the month.`
+            `🔄 Done! I've set up a ${freqWord} rule to log ${currency} ${args.amount} for ${description} on the ${finalDay} of the month.` +
+                (paymentMethod ? ` Paid via: ${paymentMethod}.` : '')
         );
         return 'complete';
     } else if (call.name === 'update_fixed_expense') {

@@ -2,6 +2,11 @@ import { and, eq } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { expenses, fixedExpenses } from '../db/schema';
 import { getExpenseCategories, resolveCategory } from '../config/expenseCategories';
+import {
+    paymentMethodBucket,
+    paymentMethodsMatch,
+    resolvePaymentMethod,
+} from '../config/paymentMethods';
 import { getReimbursementsByExpenseIds, getUnlinkedIncomeTotal } from './incomeService';
 
 function todayInKL(): Date {
@@ -53,10 +58,11 @@ function resolveBudgetPeriod(startDate?: string, endDate?: string): {
 }
 
 function rowMatchesFilters(
-    row: { category: string; description: string; date: string },
+    row: { category: string; description: string; date: string; paymentMethod?: string | null },
     filters: {
         resolvedCategory?: string;
         description?: string;
+        paymentMethod?: string;
         startDate: string;
         endDate: string;
     }
@@ -71,6 +77,9 @@ function rowMatchesFilters(
     ) {
         return false;
     }
+    if (filters.paymentMethod && !paymentMethodsMatch(row.paymentMethod, filters.paymentMethod)) {
+        return false;
+    }
     if (row.date < filters.startDate || row.date > filters.endDate) {
         return false;
     }
@@ -82,7 +91,8 @@ export async function appendExpense(
     amount: number,
     currency: string,
     category: string,
-    description: string
+    description: string,
+    paymentMethod?: string | null
 ): Promise<number> {
     const db = requireDb();
     const [row] = await db
@@ -93,6 +103,7 @@ export async function appendExpense(
             currency: currency || 'MYR',
             category: resolveCategory(category),
             description,
+            paymentMethod: resolvePaymentMethod(paymentMethod),
         })
         .returning({ id: expenses.id });
     return row.id;
@@ -104,7 +115,8 @@ export function formatExpenseLogReply(
     currency: string,
     category: string,
     description?: string,
-    expenseId?: number
+    expenseId?: number,
+    paymentMethod?: string | null
 ): string {
     const header = expenseId != null ? `✅ Logged #${expenseId}` : '✅ Logged';
     const lines = [
@@ -114,6 +126,7 @@ export function formatExpenseLogReply(
         `📁 Category: ${resolveCategory(category)}`,
     ];
     if (description) lines.push(`📝 Description: ${description}`);
+    if (paymentMethod) lines.push(`💳 Paid via: ${paymentMethod}`);
     return lines.join('\n');
 }
 
@@ -121,7 +134,8 @@ export async function getSpendingSummary(
     category?: string,
     description?: string,
     startDate?: string,
-    endDate?: string
+    endDate?: string,
+    paymentMethod?: string
 ) {
     const db = requireDb();
     const rows = await db.select().from(expenses);
@@ -138,6 +152,7 @@ export async function getSpendingSummary(
     let totalSpent = 0;
     let totalReimbursed = 0;
     const breakdown: Record<string, number> = {};
+    const breakdownByPaymentMethod: Record<string, number> = {};
     const budgetSpent: Record<string, number> = {};
 
     for (const row of rows) {
@@ -148,6 +163,7 @@ export async function getSpendingSummary(
         const summaryFilters = {
             resolvedCategory: resolvedFilterCategory,
             description,
+            paymentMethod,
             startDate: effectiveStart,
             endDate: effectiveEnd,
         };
@@ -157,12 +173,16 @@ export async function getSpendingSummary(
             totalReimbursed += reimbursed;
             totalSpent += net;
             breakdown[canonicalCategory] = (breakdown[canonicalCategory] || 0) + net;
+            const methodKey = paymentMethodBucket(row.paymentMethod);
+            breakdownByPaymentMethod[methodKey] =
+                (breakdownByPaymentMethod[methodKey] || 0) + net;
         }
 
         if (budgetPeriod.singleMonth) {
             const budgetFilters = {
                 resolvedCategory: resolvedFilterCategory,
                 description,
+                paymentMethod,
                 startDate: budgetPeriod.periodStart,
                 endDate: budgetPeriod.periodEnd,
             };
@@ -194,6 +214,7 @@ export async function getSpendingSummary(
         totalIncome,
         netCashflow: totalIncome - totalSpent,
         breakdown,
+        breakdownByPaymentMethod,
         budgetStatus,
         period: { startDate: budgetPeriod.periodStart, endDate: budgetPeriod.periodEnd },
         ...(budgetPeriod.budgetNote ? { budgetNote: budgetPeriod.budgetNote } : {}),
@@ -207,7 +228,8 @@ export async function addFixedExpense(
     category: string,
     description: string,
     frequency: number,
-    startMonth: number
+    startMonth: number,
+    paymentMethod?: string | null
 ) {
     const db = requireDb();
     await db.insert(fixedExpenses).values({
@@ -219,12 +241,20 @@ export async function addFixedExpense(
         frequencyMonths: frequency,
         startMonth,
         active: true,
+        paymentMethod: resolvePaymentMethod(paymentMethod),
     });
     return true;
 }
 
 export async function getFixedExpensesForToday(): Promise<
-    { date: string; amount: number; currency: string; category: string; description: string }[]
+    {
+        date: string;
+        amount: number;
+        currency: string;
+        category: string;
+        description: string;
+        paymentMethod: string | null;
+    }[]
 > {
     const db = requireDb();
     const today = todayInKL();
@@ -250,6 +280,7 @@ export async function getFixedExpensesForToday(): Promise<
         currency: row.currency,
         category: resolveCategory(row.category),
         description: row.description,
+        paymentMethod: row.paymentMethod ? resolvePaymentMethod(row.paymentMethod) : null,
     }));
 }
 
@@ -290,6 +321,7 @@ export async function getAllFixedExpenses() {
         currency: row.currency,
         description: row.description,
         frequency: row.frequencyMonths,
+        paymentMethod: row.paymentMethod ? resolvePaymentMethod(row.paymentMethod) : null,
     }));
 }
 
@@ -324,16 +356,20 @@ export async function updateExpense(
         currency?: string;
         category?: string;
         description?: string;
+        paymentMethod?: string | null;
     }
 ): Promise<boolean> {
     const db = requireDb();
-    const set: Record<string, string> = {};
+    const set: Record<string, string | null> = {};
 
     if (fields.date != null) set.date = fields.date;
     if (fields.amount != null) set.amount = String(fields.amount);
     if (fields.currency != null) set.currency = fields.currency;
     if (fields.category != null) set.category = resolveCategory(fields.category);
     if (fields.description != null) set.description = fields.description;
+    if (fields.paymentMethod !== undefined) {
+        set.paymentMethod = resolvePaymentMethod(fields.paymentMethod);
+    }
 
     if (Object.keys(set).length === 0) return false;
 
@@ -363,6 +399,7 @@ export async function getActiveFixedExpenses() {
         frequencyMonths: row.frequencyMonths,
         startMonth: row.startMonth,
         currency: row.currency,
+        paymentMethod: row.paymentMethod ? resolvePaymentMethod(row.paymentMethod) : null,
     }));
 }
 
@@ -374,16 +411,20 @@ export async function updateFixedExpenseById(
         amount?: number;
         dayOfMonth?: number;
         frequencyMonths?: number;
+        paymentMethod?: string | null;
     }
 ): Promise<boolean> {
     const db = requireDb();
-    const set: Record<string, string | number> = {};
+    const set: Record<string, string | number | null> = {};
 
     if (fields.description != null) set.description = fields.description;
     if (fields.category != null) set.category = resolveCategory(fields.category);
     if (fields.amount != null) set.amount = String(fields.amount);
     if (fields.dayOfMonth != null) set.dayOfMonth = fields.dayOfMonth;
     if (fields.frequencyMonths != null) set.frequencyMonths = fields.frequencyMonths;
+    if (fields.paymentMethod !== undefined) {
+        set.paymentMethod = resolvePaymentMethod(fields.paymentMethod);
+    }
 
     if (Object.keys(set).length === 0) return false;
 
@@ -411,6 +452,7 @@ export async function logBulkExpenses(expenseList: {
     currency?: string;
     category?: string;
     description: string;
+    paymentMethod?: string | null;
 }[]) {
     const db = requireDb();
     await db.insert(expenses).values(
@@ -420,6 +462,7 @@ export async function logBulkExpenses(expenseList: {
             currency: exp.currency || 'MYR',
             category: resolveCategory(exp.category),
             description: exp.description,
+            paymentMethod: resolvePaymentMethod(exp.paymentMethod),
         }))
     );
 }
