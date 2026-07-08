@@ -8,6 +8,9 @@ export interface PaymentAccount {
     id: number;
     name: string;
     accountType: PaymentAccountType;
+    initialBalance: number;
+    balanceBaselineDate: string;
+    creditLimit: number | null;
     active: boolean;
 }
 
@@ -24,11 +27,24 @@ export const DEFAULT_PAYMENT_ACCOUNTS: { name: string; accountType: PaymentAccou
     { name: 'Credit Card', accountType: 'credit' },
 ];
 
+function parseAmount(value: string | null | undefined): number {
+    if (value == null) return 0;
+    const n = parseFloat(value);
+    return Number.isFinite(n) ? n : 0;
+}
+
+function todayDateString(): string {
+    return new Date().toISOString().slice(0, 10);
+}
+
 function mapRow(row: typeof paymentAccounts.$inferSelect): PaymentAccount {
     return {
         id: row.id,
         name: row.name,
         accountType: row.accountType === 'credit' ? 'credit' : 'account',
+        initialBalance: parseAmount(row.initialBalance),
+        balanceBaselineDate: row.balanceBaselineDate,
+        creditLimit: row.creditLimit != null ? parseAmount(row.creditLimit) : null,
         active: row.active,
     };
 }
@@ -45,12 +61,15 @@ async function ensureDefaultPaymentAccounts(): Promise<void> {
     const db = requireDb();
     const rows = await db.select().from(paymentAccounts).limit(1);
     if (rows.length > 0) return;
-
+    
     await db.insert(paymentAccounts).values(
         DEFAULT_PAYMENT_ACCOUNTS.map((account) => ({
             name: account.name,
             accountType: account.accountType,
             active: true,
+            initialBalance: '0',
+            balanceBaselineDate: todayDateString(),
+            creditLimit: account.accountType === 'credit' ? '0' : null,
         }))
     );
 }
@@ -67,13 +86,27 @@ export async function listActivePaymentAccounts(): Promise<PaymentAccount[]> {
     return rows.map(mapRow);
 }
 
+export async function getPaymentAccountById(id: number): Promise<PaymentAccount | null> {
+    const db = requireDb();
+    const rows = await db.select().from(paymentAccounts).where(eq(paymentAccounts.id, id)).limit(1);
+    return rows.length > 0 ? mapRow(rows[0]) : null;
+}
+
 export async function createPaymentAccount(
     name: string,
-    accountType: PaymentAccountType
+    accountType: PaymentAccountType,
+    fields?: { initialBalance?: number; creditLimit?: number | null }
 ): Promise<number> {
     const db = requireDb();
     const normalized = normalizePaymentAccountName(name);
     if (!normalized) throw new Error('Account name is required');
+    const initialBalance =
+        accountType === 'credit' ? '0' : String(fields?.initialBalance ?? 0);
+    const creditLimit =
+        accountType === 'credit'
+            ? String(fields?.creditLimit ?? 0)
+            : null;
+    const balanceBaselineDate = todayDateString();
 
     const [row] = await db
         .insert(paymentAccounts)
@@ -81,6 +114,9 @@ export async function createPaymentAccount(
             name: normalized,
             accountType,
             active: true,
+            initialBalance,
+            balanceBaselineDate,
+            creditLimit,
         })
         .returning({ id: paymentAccounts.id });
 
@@ -92,18 +128,40 @@ export async function updatePaymentAccount(
     fields: {
         name?: string;
         accountType?: PaymentAccountType;
+        initialBalance?: number;
+        creditLimit?: number | null;
         active?: boolean;
     }
 ): Promise<boolean> {
     const db = requireDb();
-    const set: Record<string, string | boolean> = {};
+    const set: Record<string, string | boolean | null> = {};
 
     if (fields.name != null) {
         const normalized = normalizePaymentAccountName(fields.name);
         if (!normalized) throw new Error('Account name is required');
         set.name = normalized;
     }
-    if (fields.accountType != null) set.accountType = fields.accountType;
+
+    if (fields.accountType != null) {
+        set.accountType = fields.accountType;
+
+        if (fields.accountType === 'credit') {
+            set.initialBalance = '0';
+            set.balanceBaselineDate = todayDateString();
+        } else if (fields.creditLimit === undefined) {
+            set.creditLimit = null;
+        }
+    }
+
+    if (fields.initialBalance != null) {
+        set.initialBalance = String(fields.initialBalance);
+        set.balanceBaselineDate = todayDateString();
+    }
+
+    if (fields.creditLimit !== undefined) {
+        set.creditLimit = fields.creditLimit == null ? null : String(fields.creditLimit);
+    }
+
     if (fields.active != null) set.active = fields.active;
 
     if (Object.keys(set).length === 0) return false;

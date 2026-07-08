@@ -50,6 +50,9 @@ export const paymentAccounts = pgTable('payment_accounts', {
     id: serial('id').primaryKey(),
     name: text('name').notNull().unique(),
     accountType: text('account_type').default('account').notNull(),
+    initialBalance: numeric('initial_balance', { precision: 12, scale: 2 }).default('0').notNull(),
+    balanceBaselineDate: text('balance_baseline_date').notNull(),
+    creditLimit: numeric('credit_limit', { precision: 12, scale: 2 }),
     active: boolean('active').default(true).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });

@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS payment_accounts (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     account_type TEXT NOT NULL DEFAULT 'account',
+    initial_balance NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    balance_baseline_date TEXT NOT NULL DEFAULT TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD'),
+    credit_limit NUMERIC(12, 2),
     active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
