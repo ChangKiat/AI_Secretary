@@ -4,6 +4,7 @@ import { message } from 'telegraf/filters';
 import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
 import 'dotenv/config';
 import { appendExpense, getFixedExpensesForToday } from './services/expenseService';
+import { upsertInvestmentFundingTransfer } from './services/incomeService';
 import { ChatSession } from '@google/generative-ai';
 import { handleToolCall } from './tools/toolHandler';
 import { formatBulkWorkoutLogReply } from './services/gymService';
@@ -101,7 +102,7 @@ async function main() {
                 let loggedList = '';
 
                 for (const exp of expensesToLog) {
-                    await appendExpense(
+                    const expenseId = await appendExpense(
                         exp.date,
                         exp.amount,
                         exp.currency,
@@ -109,8 +110,23 @@ async function main() {
                         exp.description,
                         exp.paymentMethod
                     );
+                    if (
+                        exp.category.toLowerCase() === 'investment' &&
+                        exp.paymentMethod &&
+                        exp.toInvestmentAccount
+                    ) {
+                        await upsertInvestmentFundingTransfer({
+                            expenseId,
+                            date: exp.date,
+                            amount: exp.amount,
+                            description: exp.description,
+                            fromPaymentMethod: exp.paymentMethod,
+                            toInvestmentAccount: exp.toInvestmentAccount,
+                        });
+                    }
                     const via = exp.paymentMethod ? ` via ${exp.paymentMethod}` : '';
-                    loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount}${via})`;
+                    const toFund = exp.toInvestmentAccount ? ` → ${exp.toInvestmentAccount}` : '';
+                    loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount}${via}${toFund})`;
                 }
 
                 const msg = `🗓️ *Automated Billing:* Good morning! I just logged today's scheduled expenses:${loggedList}`;

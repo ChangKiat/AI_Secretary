@@ -43,6 +43,7 @@ export const fixedExpenses = pgTable('fixed_expenses', {
     startMonth: integer('start_month').notNull(),
     active: boolean('active').default(true).notNull(),
     paymentMethod: text('payment_method'),
+    toInvestmentAccount: text('to_investment_account'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

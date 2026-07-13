@@ -7,7 +7,7 @@ import {
     paymentMethodsMatch,
     resolvePaymentMethod,
 } from '../config/paymentMethods';
-import { getReimbursementsByExpenseIds, getUnlinkedIncomeTotal } from './incomeService';
+import { getReimbursementsByExpenseIds, getUnlinkedIncomeTotal, deleteIncomesByExpenseId } from './incomeService';
 
 function todayInKL(): Date {
     return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
@@ -229,19 +229,25 @@ export async function addFixedExpense(
     description: string,
     frequency: number,
     startMonth: number,
-    paymentMethod?: string | null
+    paymentMethod?: string | null,
+    toInvestmentAccount?: string | null
 ) {
     const db = requireDb();
+    const resolvedCategory = resolveCategory(category);
+    const isInvestment = resolvedCategory.toLowerCase() === 'investment';
     await db.insert(fixedExpenses).values({
         dayOfMonth,
         amount: String(amount),
         currency: currency || 'MYR',
-        category: resolveCategory(category),
+        category: resolvedCategory,
         description,
         frequencyMonths: frequency,
         startMonth,
         active: true,
         paymentMethod: resolvePaymentMethod(paymentMethod),
+        toInvestmentAccount: isInvestment
+            ? resolvePaymentMethod(toInvestmentAccount)
+            : null,
     });
     return true;
 }
@@ -254,6 +260,7 @@ export async function getFixedExpensesForToday(): Promise<
         category: string;
         description: string;
         paymentMethod: string | null;
+        toInvestmentAccount: string | null;
     }[]
 > {
     const db = requireDb();
@@ -281,6 +288,9 @@ export async function getFixedExpensesForToday(): Promise<
         category: resolveCategory(row.category),
         description: row.description,
         paymentMethod: row.paymentMethod ? resolvePaymentMethod(row.paymentMethod) : null,
+        toInvestmentAccount: row.toInvestmentAccount
+            ? resolvePaymentMethod(row.toInvestmentAccount)
+            : null,
     }));
 }
 
@@ -379,6 +389,7 @@ export async function updateExpense(
 
 export async function deleteExpense(id: number): Promise<boolean> {
     const db = requireDb();
+    await deleteIncomesByExpenseId(id);
     const result = await db.delete(expenses).where(eq(expenses.id, id));
     return (result.count ?? 0) > 0;
 }
@@ -400,6 +411,9 @@ export async function getActiveFixedExpenses() {
         startMonth: row.startMonth,
         currency: row.currency,
         paymentMethod: row.paymentMethod ? resolvePaymentMethod(row.paymentMethod) : null,
+        toInvestmentAccount: row.toInvestmentAccount
+            ? resolvePaymentMethod(row.toInvestmentAccount)
+            : null,
     }));
 }
 
@@ -412,6 +426,7 @@ export async function updateFixedExpenseById(
         dayOfMonth?: number;
         frequencyMonths?: number;
         paymentMethod?: string | null;
+        toInvestmentAccount?: string | null;
     }
 ): Promise<boolean> {
     const db = requireDb();
@@ -424,6 +439,13 @@ export async function updateFixedExpenseById(
     if (fields.frequencyMonths != null) set.frequencyMonths = fields.frequencyMonths;
     if (fields.paymentMethod !== undefined) {
         set.paymentMethod = resolvePaymentMethod(fields.paymentMethod);
+    }
+    if (fields.toInvestmentAccount !== undefined) {
+        set.toInvestmentAccount = resolvePaymentMethod(fields.toInvestmentAccount);
+    }
+
+    if (fields.category != null && resolveCategory(fields.category).toLowerCase() !== 'investment') {
+        set.toInvestmentAccount = null;
     }
 
     if (Object.keys(set).length === 0) return false;

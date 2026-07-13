@@ -6,13 +6,23 @@ import {
 let cachedAccounts: PaymentAccount[] = [];
 let nameByLower = new Map<string, string>();
 let paymentMethodDescription = '';
+let expensePaymentMethodDescription = '';
+
+function namesForDescription(accounts: PaymentAccount[]): string {
+    return accounts.map((a) => a.name).join(', ');
+}
 
 function applyCache(accounts: PaymentAccount[]): PaymentAccount[] {
     cachedAccounts = accounts;
     nameByLower = new Map(accounts.map((account) => [account.name.toLowerCase(), account.name]));
+    const spendable = accounts.filter((a) => a.accountType !== 'investment');
     paymentMethodDescription =
         accounts.length > 0
-            ? `Optional. Use one of: ${accounts.map((a) => a.name).join(', ')}. Omit if unknown.`
+            ? `Optional. Use one of: ${namesForDescription(accounts)}. Omit if unknown.`
+            : 'Optional. Configure payment accounts in the dashboard Income tab. Omit if unknown.';
+    expensePaymentMethodDescription =
+        spendable.length > 0
+            ? `Optional. Use one of: ${namesForDescription(spendable)}. Omit if unknown. Do not use investment accounts for expenses.`
             : 'Optional. Configure payment accounts in the dashboard Income tab. Omit if unknown.';
     return cachedAccounts;
 }
@@ -28,6 +38,13 @@ export function getPaymentAccounts(): PaymentAccount[] {
 
 export function getPaymentAccountNames(): string[] {
     return cachedAccounts.map((account) => account.name);
+}
+
+/** Names suitable for expense payment methods (excludes investment). */
+export function getExpensePaymentAccountNames(): string[] {
+    return cachedAccounts
+        .filter((account) => account.accountType !== 'investment')
+        .map((account) => account.name);
 }
 
 export function resolvePaymentMethod(input?: string | null): string | null {
@@ -51,8 +68,17 @@ export function paymentMethodsMatch(
     return resolvePaymentMethod(stored) === resolvedFilter;
 }
 
+/** Full list including investment (income / transfers). */
 export function getPaymentMethodDescription(): string {
     return paymentMethodDescription || 'Optional payment account name. Omit if unknown.';
+}
+
+/** Expense-facing list without investment accounts. */
+export function getExpensePaymentMethodDescription(): string {
+    return (
+        expensePaymentMethodDescription ||
+        'Optional payment account name. Omit if unknown. Do not use investment accounts for expenses.'
+    );
 }
 
 export function paymentMethodBucket(stored: string | null | undefined): string {

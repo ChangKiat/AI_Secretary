@@ -2,7 +2,7 @@ import { and, asc, eq } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { paymentAccounts } from '../db/schema';
 
-export type PaymentAccountType = 'account' | 'credit';
+export type PaymentAccountType = 'account' | 'credit' | 'investment';
 
 export interface PaymentAccount {
     id: number;
@@ -37,11 +37,17 @@ function todayDateString(): string {
     return new Date().toISOString().slice(0, 10);
 }
 
+function mapAccountType(value: string): PaymentAccountType {
+    if (value === 'credit') return 'credit';
+    if (value === 'investment') return 'investment';
+    return 'account';
+}
+
 function mapRow(row: typeof paymentAccounts.$inferSelect): PaymentAccount {
     return {
         id: row.id,
         name: row.name,
-        accountType: row.accountType === 'credit' ? 'credit' : 'account',
+        accountType: mapAccountType(row.accountType),
         initialBalance: parseAmount(row.initialBalance),
         balanceBaselineDate: row.balanceBaselineDate,
         creditLimit: row.creditLimit != null ? parseAmount(row.creditLimit) : null,
@@ -54,7 +60,11 @@ export function normalizePaymentAccountName(name: string): string {
 }
 
 export function isValidPaymentAccountType(value: string): value is PaymentAccountType {
-    return value === 'account' || value === 'credit';
+    return value === 'account' || value === 'credit' || value === 'investment';
+}
+
+export function isDebitBalanceType(accountType: PaymentAccountType): boolean {
+    return accountType === 'account' || accountType === 'investment';
 }
 
 async function ensureDefaultPaymentAccounts(): Promise<void> {

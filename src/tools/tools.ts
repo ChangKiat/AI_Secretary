@@ -1,6 +1,9 @@
 import { FunctionDeclaration, SchemaType } from '@google/generative-ai';
 import { getExpenseCategoryDescription } from '../config/expenseCategories';
-import { getPaymentMethodDescription } from '../config/paymentMethods';
+import {
+    getExpensePaymentMethodDescription,
+    getPaymentMethodDescription,
+} from '../config/paymentMethods';
 
 function categoryParam(prefix = ''): { type: SchemaType.STRING; description: string } {
     const base = getExpenseCategoryDescription();
@@ -39,7 +42,7 @@ function buildLogExpenseDeclaration(): FunctionDeclaration {
                 },
                 paymentMethod: {
                     type: SchemaType.STRING,
-                    description: getPaymentMethodDescription(),
+                    description: getExpensePaymentMethodDescription(),
                 },
             },
             required: ['amount', 'currency', 'category', 'description'],
@@ -130,7 +133,7 @@ function buildAddFixedExpenseDeclaration(): FunctionDeclaration {
                 description: { type: SchemaType.STRING, description: 'Auto-generate a brief description.' },
                 paymentMethod: {
                     type: SchemaType.STRING,
-                    description: getPaymentMethodDescription(),
+                    description: getExpensePaymentMethodDescription(),
                 },
             },
             required: ['dayOfMonth', 'amount'],
@@ -163,7 +166,7 @@ function buildLogBulkExpensesDeclaration(): FunctionDeclaration {
                             },
                             paymentMethod: {
                                 type: SchemaType.STRING,
-                                description: getPaymentMethodDescription(),
+                                description: getExpensePaymentMethodDescription(),
                             },
                         },
                         required: ['amount', 'currency', 'category', 'description'],

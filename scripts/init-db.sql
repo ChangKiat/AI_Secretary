@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS fixed_expenses (
     start_month INTEGER NOT NULL,
     active BOOLEAN NOT NULL DEFAULT TRUE,
     payment_method TEXT,
+    to_investment_account TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 

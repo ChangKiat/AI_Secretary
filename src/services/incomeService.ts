@@ -83,9 +83,6 @@ export async function appendIncome(
         fromPaymentMethod
     );
     if (validationError) throw new Error(validationError);
-    if (isAccountTransferCategory(resolvedCategory) && expenseId != null) {
-        throw new Error('Account transfer cannot be linked to an expense');
-    }
 
     const accounts = normalizeIncomePaymentFields(resolvedCategory, paymentMethod, fromPaymentMethod);
     const db = requireDb();
@@ -98,7 +95,7 @@ export async function appendIncome(
             category: resolvedCategory,
             description,
             source: source || null,
-            expenseId: isAccountTransferCategory(resolvedCategory) ? null : (expenseId ?? null),
+            expenseId: expenseId ?? null,
             paymentMethod: accounts.paymentMethod,
             fromPaymentMethod: accounts.fromPaymentMethod,
         })
@@ -174,6 +171,7 @@ export async function getReimbursementsByExpenseIds(
 
     for (const row of rows) {
         if (row.expenseId == null) continue;
+        if (isAccountTransferCategory(row.category)) continue;
         const amount = parseFloat(row.amount);
         map.set(row.expenseId, (map.get(row.expenseId) || 0) + amount);
     }
@@ -250,16 +248,14 @@ export async function updateIncome(
     if (fields.description != null) set.description = fields.description;
     if (fields.source !== undefined) set.source = fields.source;
 
-    if (fields.category != null && isAccountTransferCategory(nextCategory)) {
-        set.expenseId = null;
-    } else if (fields.expenseId !== undefined) {
+    if (fields.expenseId !== undefined) {
         set.expenseId = fields.expenseId;
+    } else if (fields.category != null && !isAccountTransferCategory(nextCategory)) {
+        // category changed away from transfer — leave expenseId as-is unless cleared above
     }
 
     if (fields.paymentMethod !== undefined || fields.category != null) {
-        set.paymentMethod = isAccountTransferCategory(nextCategory)
-            ? nextPaymentMethod
-            : nextPaymentMethod;
+        set.paymentMethod = nextPaymentMethod;
     }
     if (fields.fromPaymentMethod !== undefined || fields.category != null) {
         set.fromPaymentMethod = isAccountTransferCategory(nextCategory)
@@ -277,6 +273,57 @@ export async function deleteIncome(id: number): Promise<boolean> {
     const db = requireDb();
     const result = await db.delete(incomes).where(eq(incomes.id, id));
     return (result.count ?? 0) > 0;
+}
+
+export async function deleteIncomesByExpenseId(expenseId: number): Promise<number> {
+    const db = requireDb();
+    const result = await db.delete(incomes).where(eq(incomes.expenseId, expenseId));
+    return result.count ?? 0;
+}
+
+/** Linked Account transfer that funds an investment from an Investment expense. */
+export async function upsertInvestmentFundingTransfer(fields: {
+    expenseId: number;
+    date: string;
+    amount: number;
+    description: string;
+    fromPaymentMethod: string;
+    toInvestmentAccount: string;
+}): Promise<number> {
+    const existing = await getIncomesByExpenseId(fields.expenseId);
+    const transfer = existing.find((row) => isAccountTransferCategory(row.category));
+    if (transfer) {
+        await updateIncome(transfer.id, {
+            date: fields.date,
+            amount: fields.amount,
+            description: fields.description,
+            category: 'Account transfer',
+            expenseId: fields.expenseId,
+            paymentMethod: fields.toInvestmentAccount,
+            fromPaymentMethod: fields.fromPaymentMethod,
+        });
+        return transfer.id;
+    }
+    return appendIncome(
+        fields.date,
+        fields.amount,
+        'MYR',
+        'Account transfer',
+        fields.description,
+        undefined,
+        fields.expenseId,
+        fields.toInvestmentAccount,
+        fields.fromPaymentMethod
+    );
+}
+
+export async function deleteInvestmentFundingTransfer(expenseId: number): Promise<void> {
+    const existing = await getIncomesByExpenseId(expenseId);
+    for (const row of existing) {
+        if (isAccountTransferCategory(row.category)) {
+            await deleteIncome(row.id);
+        }
+    }
 }
 
 export async function getUnlinkedIncomeTotal(startDate: string, endDate: string): Promise<number> {
