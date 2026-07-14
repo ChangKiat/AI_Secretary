@@ -1,4 +1,4 @@
-import { asc } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { budgets } from '../db/schema';
 
@@ -90,4 +90,70 @@ export function resolveCategory(input?: string): string {
     if (alias) return categoryByLower.get(alias.toLowerCase()) ?? alias;
 
     return categoryByLower.get(lower) ?? fallback;
+}
+
+function titleCaseCategory(name: string): string {
+    return name
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join(' ');
+}
+
+export async function upsertBudget(
+    category: string,
+    monthlyBudget: number
+): Promise<{ category: string; monthlyBudget: number; created: boolean }> {
+    if (!(monthlyBudget > 0)) {
+        throw new Error('monthlyBudget must be greater than 0');
+    }
+
+    const trimmed = category.trim();
+    if (!trimmed) throw new Error('category is required');
+
+    const existingCanonical = categoryByLower.get(trimmed.toLowerCase());
+    const canonical = existingCanonical ?? titleCaseCategory(trimmed);
+    const created = !existingCanonical;
+
+    const db = requireDb();
+    if (created) {
+        await db.insert(budgets).values({
+            category: canonical,
+            monthlyBudget: String(monthlyBudget),
+            currency: 'MYR',
+        });
+    } else {
+        await db
+            .update(budgets)
+            .set({ monthlyBudget: String(monthlyBudget) })
+            .where(eq(budgets.category, canonical));
+    }
+
+    await loadExpenseCategories();
+    return { category: canonical, monthlyBudget, created };
+}
+
+export function getBudgets(): ExpenseCategory[] {
+    return getExpenseCategories();
+}
+
+// ponytail self-check: validation without DB
+if (require.main === module) {
+    (async () => {
+        let rejected = false;
+        try {
+            await upsertBudget('Food', 0);
+        } catch {
+            rejected = true;
+        }
+        if (!rejected) throw new Error('expected invalid amount rejection');
+        if (titleCaseCategory('health care') !== 'Health Care') {
+            throw new Error('titleCaseCategory failed');
+        }
+        console.log('expenseCategories budget self-check ok');
+    })().catch((e) => {
+        console.error(e);
+        process.exit(1);
+    });
 }

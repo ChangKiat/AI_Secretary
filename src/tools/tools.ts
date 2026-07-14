@@ -470,6 +470,33 @@ export const updateUserSettingsDeclaration: FunctionDeclaration = {
     },
 };
 
+export const upsertBudgetDeclaration: FunctionDeclaration = {
+    name: 'upsert_budget',
+    description:
+        'Creates a new monthly budget category or updates an existing category amount. Use when the user sets, changes, or creates a budget (e.g. "set Food budget to 1000", "add Healthcare budget RM300").',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            category: {
+                type: SchemaType.STRING,
+                description: 'Budget category name. Existing name to update, or new name to create.',
+            },
+            monthlyBudget: {
+                type: SchemaType.NUMBER,
+                description: 'Monthly budget amount in MYR. Must be greater than 0.',
+            },
+        },
+        required: ['category', 'monthlyBudget'],
+    },
+};
+
+export const getBudgetsDeclaration: FunctionDeclaration = {
+    name: 'get_budgets',
+    description:
+        'Lists all budget categories with their monthly amounts. Use for "what are my budgets?" or after creating/updating a budget.',
+    parameters: { type: SchemaType.OBJECT, properties: {} },
+};
+
 export function getAllFunctionDeclarations(): FunctionDeclaration[] {
     return [
         buildLogExpenseDeclaration(),
@@ -479,6 +506,8 @@ export function getAllFunctionDeclarations(): FunctionDeclaration[] {
         updateFixedExpenseDeclaration,
         getAllFixedExpensesDeclaration,
         deleteFixedExpenseDeclaration,
+        upsertBudgetDeclaration,
+        getBudgetsDeclaration,
         createCalendarEventDeclaration,
         checkScheduleDeclaration,
         buildLogBulkExpensesDeclaration(),

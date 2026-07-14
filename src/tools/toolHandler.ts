@@ -1,7 +1,7 @@
 import { Context } from 'telegraf';
 import { randomUUID } from 'crypto';
 import { ChatSession, FunctionCall } from '@google/generative-ai';
-import { resolveCategory } from '../config/expenseCategories';
+import { resolveCategory, upsertBudget, getBudgets } from '../config/expenseCategories';
 import { resolvePaymentMethod } from '../config/paymentMethods';
 import {
     appendExpense,
@@ -758,6 +758,47 @@ export async function handleToolCall(
         const remaining = await getTodayProteinRemaining(userId, date);
         const toolResult = await chat.sendMessage([
             { functionResponse: { name: 'suggest_meal', response: remaining } },
+        ]);
+        await ctx.reply(toolResult.response.text());
+        return 'complete';
+    } else if (call.name === 'upsert_budget') {
+        const args = call.args as { category: string; monthlyBudget: number };
+        try {
+            const result = await upsertBudget(args.category, args.monthlyBudget);
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'upsert_budget',
+                        response: { status: 'success', ...result },
+                    },
+                },
+            ]);
+            if (result.created) {
+                await ctx.reply(
+                    `✅ Budget created: ${result.category} MYR ${result.monthlyBudget}/month`
+                );
+            } else {
+                await ctx.reply(
+                    `✅ Budget updated: ${result.category} → MYR ${result.monthlyBudget}/month`
+                );
+            }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Failed to save budget';
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'upsert_budget',
+                        response: { status: 'error', message },
+                    },
+                },
+            ]);
+            await ctx.reply(`⚠️ ${message}`);
+        }
+        return 'complete';
+    } else if (call.name === 'get_budgets') {
+        const list = getBudgets();
+        const toolResult = await chat.sendMessage([
+            { functionResponse: { name: 'get_budgets', response: { budgets: list } } },
         ]);
         await ctx.reply(toolResult.response.text());
         return 'complete';

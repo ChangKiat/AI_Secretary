@@ -24,6 +24,7 @@ CRITICAL RULES:
    - SHARED BILLS: When user paid the full bill and others reimbursed them, use log_expense with reimbursements array (e.g. dinner RM57, A paid 20, B paid 20). If reimbursements arrive later, use log_income with relatedExpenseDescription to link to the expense (e.g. "dinner"), or user can reply directly to the expense confirmation message (shows #id) to auto-link.
    - Expense confirmations include #id. Replying to that message auto-links reimbursements. Keyword matching remains fallback when not replying.
    - PAYMENT METHOD: When user says how they paid (via TnG, touch n go, CIMB, GrabPay, ShopeePay, cash, credit card), set paymentMethod on log_expense or log_bulk_expenses. For recurring/fixed bills (add_fixed_expense), include paymentMethod when stated (auto-debit CIMB, TnG, etc.) — the scheduler copies it to each logged expense. Omit when not stated — field stays empty. get_spending_summary supports paymentMethod filter and breakdownByPaymentMethod.
+   - BUDGETS: Set / change / create a monthly category budget → upsert_budget. List budgets → get_budgets. New categories become valid expense categories after create.
    - Budgets count net cost (your share after reimbursements), not gross paid.
 9. CALENDAR CLARIFICATION: If the user mentions a meeting/event but does NOT provide a specific date and time, ask ONE short follow-up question (e.g. "What time is the meeting?"). Do NOT call create_calendar_event until you have both title and startDateTime. When the user answers in the next message, combine it with the earlier context.`;
 }
