@@ -211,6 +211,96 @@ export const deleteFixedExpenseDeclaration: FunctionDeclaration = {
     },
 };
 
+function buildEditExpenseDeclaration(): FunctionDeclaration {
+    return {
+        name: 'edit_expense',
+        description:
+            'Updates an existing one-off expense by id. Prefer when user replies to an expense confirmation and asks to fix amount/category/description. Omit id if REPLY CONTEXT already names the expense id.',
+        parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+                id: {
+                    type: SchemaType.NUMBER,
+                    description: 'Expense id from confirmation (#N). Optional when REPLY CONTEXT provides it.',
+                },
+                amount: { type: SchemaType.NUMBER, description: 'Corrected amount.' },
+                currency: { type: SchemaType.STRING, description: 'Currency code, e.g. MYR.' },
+                category: categoryParam('Corrected category.'),
+                description: { type: SchemaType.STRING, description: 'Corrected description.' },
+                date: { type: SchemaType.STRING, description: 'YYYY-MM-DD.' },
+                paymentMethod: {
+                    type: SchemaType.STRING,
+                    description: getExpensePaymentMethodDescription(),
+                },
+            },
+        },
+    };
+}
+
+export const deleteExpenseDeclaration: FunctionDeclaration = {
+    name: 'delete_expense',
+    description:
+        'Deletes a one-off expense by id (also removes linked reimbursements). Prefer when user replies to an expense confirmation and says delete. Omit id if REPLY CONTEXT provides it.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            id: {
+                type: SchemaType.NUMBER,
+                description: 'Expense id from confirmation (#N). Optional when REPLY CONTEXT provides it.',
+            },
+        },
+    },
+};
+
+function buildEditIncomeDeclaration(): FunctionDeclaration {
+    return {
+        name: 'edit_income',
+        description:
+            'Updates an existing income by id. Prefer when user replies to an income confirmation and asks to fix fields. Omit id if REPLY CONTEXT already names the income id.',
+        parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+                id: {
+                    type: SchemaType.NUMBER,
+                    description: 'Income id from confirmation (#N). Optional when REPLY CONTEXT provides it.',
+                },
+                amount: { type: SchemaType.NUMBER, description: 'Corrected amount.' },
+                currency: { type: SchemaType.STRING, description: 'Currency code, e.g. MYR.' },
+                category: {
+                    type: SchemaType.STRING,
+                    description: 'Claim, Transfer, Salary, Account transfer, or Other.',
+                },
+                description: { type: SchemaType.STRING, description: 'Corrected description.' },
+                source: { type: SchemaType.STRING, description: 'Person or payer name.' },
+                date: { type: SchemaType.STRING, description: 'YYYY-MM-DD.' },
+                paymentMethod: {
+                    type: SchemaType.STRING,
+                    description: `To account. ${getPaymentMethodDescription()}`,
+                },
+                fromPaymentMethod: {
+                    type: SchemaType.STRING,
+                    description: 'From account (Account transfer).',
+                },
+            },
+        },
+    };
+}
+
+export const deleteIncomeDeclaration: FunctionDeclaration = {
+    name: 'delete_income',
+    description:
+        'Deletes an income by id. Prefer when user replies to an income confirmation and says delete. Omit id if REPLY CONTEXT provides it.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            id: {
+                type: SchemaType.NUMBER,
+                description: 'Income id from confirmation (#N). Optional when REPLY CONTEXT provides it.',
+            },
+        },
+    },
+};
+
 export const createCalendarEventDeclaration: FunctionDeclaration = {
     name: 'create_calendar_event',
     description: 'Use this tool WHENEVER the user mentions scheduling, booking, or POSTPONING a meeting. Triggers on conversational updates like "I postponed the meeting to...". Only call when you have a specific startDateTime. If time is missing, ask the user first.',
@@ -413,11 +503,15 @@ export const getMealHistoryDeclaration: FunctionDeclaration = {
 export const editMealDeclaration: FunctionDeclaration = {
     name: 'edit_meal',
     description:
-        'Updates an existing meal by id. Use when the user corrects food identification (e.g. chicken → pork) or macro estimates. Re-estimate all macros for the corrected food and portion.',
+        'Updates an existing meal by id. Use when the user corrects food identification (e.g. chicken → pork) or macro estimates. Re-estimate all macros for the corrected food and portion. Omit id if REPLY CONTEXT already names the meal id.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
-            id: { type: SchemaType.NUMBER, description: 'Meal id from get_meal_history or log_meal response.' },
+            id: {
+                type: SchemaType.NUMBER,
+                description:
+                    'Meal id from get_meal_history, log_meal, or REPLY CONTEXT. Optional when REPLY CONTEXT provides it.',
+            },
             description: { type: SchemaType.STRING, description: 'Corrected food description.' },
             mealType: { type: SchemaType.STRING, description: 'breakfast, lunch, dinner, snack.' },
             proteinG: { type: SchemaType.NUMBER, description: 'Re-estimated protein in grams.' },
@@ -425,19 +519,23 @@ export const editMealDeclaration: FunctionDeclaration = {
             fatG: { type: SchemaType.NUMBER, description: 'Re-estimated fat in grams.' },
             calories: { type: SchemaType.NUMBER, description: 'Re-estimated calories.' },
         },
-        required: ['id', 'description', 'proteinG', 'carbsG', 'fatG', 'calories'],
+        required: ['description', 'proteinG', 'carbsG', 'fatG', 'calories'],
     },
 };
 
 export const deleteMealDeclaration: FunctionDeclaration = {
     name: 'delete_meal',
-    description: 'Deletes a logged meal by id. Use when the user wants to remove a wrong entry entirely.',
+    description:
+        'Deletes a logged meal by id. Use when the user wants to remove a wrong entry entirely. Omit id if REPLY CONTEXT provides it.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
-            id: { type: SchemaType.NUMBER, description: 'Meal id from get_meal_history.' },
+            id: {
+                type: SchemaType.NUMBER,
+                description:
+                    'Meal id from get_meal_history or REPLY CONTEXT. Optional when REPLY CONTEXT provides it.',
+            },
         },
-        required: ['id'],
     },
 };
 
@@ -501,6 +599,10 @@ export function getAllFunctionDeclarations(): FunctionDeclaration[] {
     return [
         buildLogExpenseDeclaration(),
         buildLogIncomeDeclaration(),
+        buildEditExpenseDeclaration(),
+        deleteExpenseDeclaration,
+        buildEditIncomeDeclaration(),
+        deleteIncomeDeclaration,
         buildGetSummaryDeclaration(),
         buildAddFixedExpenseDeclaration(),
         updateFixedExpenseDeclaration,

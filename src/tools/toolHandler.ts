@@ -12,6 +12,9 @@ import {
     deleteFixedExpense,
     logBulkExpenses,
     formatExpenseLogReply,
+    updateExpense,
+    deleteExpense,
+    getExpenseById,
 } from '../services/expenseService';
 import {
     appendIncome,
@@ -19,6 +22,10 @@ import {
     findRecentExpenseByDescription,
     formatIncomeLogReply,
     formatSharedExpenseReply,
+    updateIncome,
+    deleteIncome,
+    getIncomeById,
+    ReplyRecordTarget,
 } from '../services/incomeService';
 import { createCalendarEvent, getSchedule } from '../services/calendarService';
 import {
@@ -60,6 +67,17 @@ export interface ToolCallOptions {
     workoutBatchCollector?: WorkoutLogEntry[];
     workoutBatchSessionId?: string;
     replyToExpenseId?: number;
+    replyTarget?: ReplyRecordTarget;
+}
+
+function resolveToolRecordId(
+    argsId: number | undefined,
+    options: ToolCallOptions | undefined,
+    type: ReplyRecordTarget['type']
+): number | undefined {
+    if (argsId != null && argsId > 0) return argsId;
+    if (options?.replyTarget?.type === type) return options.replyTarget.id;
+    return undefined;
 }
 function getUserId(ctx: Context): number {
     return ctx.from!.id;
@@ -245,7 +263,7 @@ export async function handleToolCall(
             const found = await findRecentExpenseByDescription(args.relatedExpenseDescription);
             if (found) expenseId = found;
         }
-        await appendIncome(
+        const incomeId = await appendIncome(
             resolvedDate,
             args.amount,
             resolvedCurrency,
@@ -257,7 +275,7 @@ export async function handleToolCall(
             args.fromPaymentMethod
         );
         await chat.sendMessage([
-            { functionResponse: { name: 'log_income', response: { status: 'success' } } },
+            { functionResponse: { name: 'log_income', response: { status: 'success', incomeId } } },
         ]);
         await ctx.reply(
             formatIncomeLogReply(
@@ -266,12 +284,195 @@ export async function handleToolCall(
                 resolvedCurrency,
                 args.category,
                 args.description,
+                incomeId,
                 args.source,
                 expenseId != null,
                 args.paymentMethod,
                 args.fromPaymentMethod
             )
         );
+        return 'complete';
+    } else if (call.name === 'edit_expense') {
+        const args = call.args as {
+            id?: number;
+            date?: string;
+            amount?: number;
+            currency?: string;
+            category?: string;
+            description?: string;
+            paymentMethod?: string;
+        };
+        const id = resolveToolRecordId(args.id, options, 'expense');
+        if (id == null) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'edit_expense', response: { status: 'missing_id' } } },
+            ]);
+            await ctx.reply('⚠️ Reply to an expense confirmation or provide the expense #id to edit.');
+            return 'complete';
+        }
+        const existing = await getExpenseById(id);
+        if (!existing) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'edit_expense', response: { status: 'not_found' } } },
+            ]);
+            await ctx.reply(`⚠️ Could not find expense #${id} to update.`);
+            return 'complete';
+        }
+        const updated = await updateExpense(id, {
+            date: args.date,
+            amount: args.amount,
+            currency: args.currency,
+            category: args.category,
+            description: args.description,
+            paymentMethod: args.paymentMethod,
+        });
+        if (!updated) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'edit_expense', response: { status: 'failed' } } },
+            ]);
+            await ctx.reply(`⚠️ Failed to update expense #${id}.`);
+            return 'complete';
+        }
+        const row = (await getExpenseById(id))!;
+        await chat.sendMessage([
+            { functionResponse: { name: 'edit_expense', response: { status: 'success', expenseId: id } } },
+        ]);
+        await ctx.reply(
+            formatExpenseLogReply(
+                row.date,
+                row.amount,
+                row.currency,
+                row.category,
+                row.description,
+                row.id,
+                row.paymentMethod,
+                '✅ Updated'
+            )
+        );
+        return 'complete';
+    } else if (call.name === 'delete_expense') {
+        const args = call.args as { id?: number };
+        const id = resolveToolRecordId(args.id, options, 'expense');
+        if (id == null) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'delete_expense', response: { status: 'missing_id' } } },
+            ]);
+            await ctx.reply('⚠️ Reply to an expense confirmation or provide the expense #id to delete.');
+            return 'complete';
+        }
+        const deleted = await deleteExpense(id);
+        if (!deleted) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'delete_expense', response: { status: 'not_found' } } },
+            ]);
+            await ctx.reply(`⚠️ Could not find expense #${id} to delete.`);
+            return 'complete';
+        }
+        await chat.sendMessage([
+            { functionResponse: { name: 'delete_expense', response: { status: 'success', expenseId: id } } },
+        ]);
+        await ctx.reply(`🗑️ Deleted expense #${id}`);
+        return 'complete';
+    } else if (call.name === 'edit_income') {
+        const args = call.args as {
+            id?: number;
+            date?: string;
+            amount?: number;
+            currency?: string;
+            category?: string;
+            description?: string;
+            source?: string;
+            paymentMethod?: string;
+            fromPaymentMethod?: string;
+        };
+        const id = resolveToolRecordId(args.id, options, 'income');
+        if (id == null) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'edit_income', response: { status: 'missing_id' } } },
+            ]);
+            await ctx.reply('⚠️ Reply to an income confirmation or provide the income #id to edit.');
+            return 'complete';
+        }
+        const existing = await getIncomeById(id);
+        if (!existing) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'edit_income', response: { status: 'not_found' } } },
+            ]);
+            await ctx.reply(`⚠️ Could not find income #${id} to update.`);
+            return 'complete';
+        }
+        try {
+            const updated = await updateIncome(id, {
+                date: args.date,
+                amount: args.amount,
+                currency: args.currency,
+                category: args.category,
+                description: args.description,
+                source: args.source,
+                paymentMethod: args.paymentMethod,
+                fromPaymentMethod: args.fromPaymentMethod,
+            });
+            if (!updated) {
+                await chat.sendMessage([
+                    { functionResponse: { name: 'edit_income', response: { status: 'failed' } } },
+                ]);
+                await ctx.reply(`⚠️ Failed to update income #${id}.`);
+                return 'complete';
+            }
+        } catch (err: any) {
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'edit_income',
+                        response: { status: 'error', message: err?.message },
+                    },
+                },
+            ]);
+            await ctx.reply(`⚠️ ${err?.message || 'Failed to update income.'}`);
+            return 'complete';
+        }
+        const row = (await getIncomeById(id))!;
+        await chat.sendMessage([
+            { functionResponse: { name: 'edit_income', response: { status: 'success', incomeId: id } } },
+        ]);
+        await ctx.reply(
+            formatIncomeLogReply(
+                row.date,
+                row.amount,
+                row.currency,
+                row.category,
+                row.description,
+                row.id,
+                row.source ?? undefined,
+                row.expenseId != null,
+                row.paymentMethod,
+                row.fromPaymentMethod,
+                '✅ Updated income'
+            )
+        );
+        return 'complete';
+    } else if (call.name === 'delete_income') {
+        const args = call.args as { id?: number };
+        const id = resolveToolRecordId(args.id, options, 'income');
+        if (id == null) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'delete_income', response: { status: 'missing_id' } } },
+            ]);
+            await ctx.reply('⚠️ Reply to an income confirmation or provide the income #id to delete.');
+            return 'complete';
+        }
+        const deleted = await deleteIncome(id);
+        if (!deleted) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'delete_income', response: { status: 'not_found' } } },
+            ]);
+            await ctx.reply(`⚠️ Could not find income #${id} to delete.`);
+            return 'complete';
+        }
+        await chat.sendMessage([
+            { functionResponse: { name: 'delete_income', response: { status: 'success', incomeId: id } } },
+        ]);
+        await ctx.reply(`🗑️ Deleted income #${id}`);
         return 'complete';
     } else if (call.name === 'get_spending_summary') {
         const args = call.args as {
@@ -659,7 +860,7 @@ export async function handleToolCall(
         return 'complete';
     } else if (call.name === 'edit_meal') {
         const args = call.args as {
-            id: number;
+            id?: number;
             description: string;
             mealType?: string;
             proteinG: number;
@@ -667,16 +868,24 @@ export async function handleToolCall(
             fatG: number;
             calories: number;
         };
-        const existing = await getMealById(args.id, userId);
+        const mealId = resolveToolRecordId(args.id, options, 'meal');
+        if (mealId == null) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'edit_meal', response: { status: 'missing_id' } } },
+            ]);
+            await ctx.reply('⚠️ Reply to a meal confirmation or provide the meal id to edit.');
+            return 'complete';
+        }
+        const existing = await getMealById(mealId, userId);
         if (!existing) {
             await chat.sendMessage([
                 { functionResponse: { name: 'edit_meal', response: { status: 'not_found' } } },
             ]);
-            await ctx.reply(`⚠️ Could not find meal #${args.id} to update.`);
+            await ctx.reply(`⚠️ Could not find meal #${mealId} to update.`);
             return 'complete';
         }
 
-        const updated = await updateMeal(args.id, userId, {
+        const updated = await updateMeal(mealId, userId, {
             description: args.description,
             mealType: args.mealType,
             proteinG: args.proteinG,
@@ -689,7 +898,7 @@ export async function handleToolCall(
             await chat.sendMessage([
                 { functionResponse: { name: 'edit_meal', response: { status: 'failed' } } },
             ]);
-            await ctx.reply(`⚠️ Failed to update meal #${args.id}.`);
+            await ctx.reply(`⚠️ Failed to update meal #${mealId}.`);
             return 'complete';
         }
 
@@ -708,23 +917,31 @@ export async function handleToolCall(
             {
                 functionResponse: {
                     name: 'edit_meal',
-                    response: { status: 'success', mealId: args.id, meal, todayProgress: progress },
+                    response: { status: 'success', mealId, meal, todayProgress: progress },
                 },
             },
         ]);
         await ctx.reply(
-            formatMealLogReply(meal, date, progress, args.id, '✅ Updated')
+            formatMealLogReply(meal, date, progress, mealId, '✅ Updated')
         );
         return 'complete';
     } else if (call.name === 'delete_meal') {
-        const args = call.args as { id: number };
-        const deleted = await deleteMeal(args.id, userId);
+        const args = call.args as { id?: number };
+        const mealId = resolveToolRecordId(args.id, options, 'meal');
+        if (mealId == null) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'delete_meal', response: { status: 'missing_id' } } },
+            ]);
+            await ctx.reply('⚠️ Reply to a meal confirmation or provide the meal id to delete.');
+            return 'complete';
+        }
+        const deleted = await deleteMeal(mealId, userId);
 
         if (!deleted) {
             await chat.sendMessage([
                 { functionResponse: { name: 'delete_meal', response: { status: 'not_found' } } },
             ]);
-            await ctx.reply(`⚠️ Could not find meal #${args.id} to delete.`);
+            await ctx.reply(`⚠️ Could not find meal #${mealId} to delete.`);
             return 'complete';
         }
 
@@ -734,12 +951,12 @@ export async function handleToolCall(
             {
                 functionResponse: {
                     name: 'delete_meal',
-                    response: { status: 'success', mealId: args.id, todayProgress: progress },
+                    response: { status: 'success', mealId, todayProgress: progress },
                 },
             },
         ]);
         await ctx.reply(
-            `🗑️ Deleted meal #${args.id}.\n` +
+            `🗑️ Deleted meal #${mealId}.\n` +
                 `Today: ${progress.calories.consumed}/${progress.calories.target} cal · ` +
                 `Protein ${progress.protein.consumed}/${progress.protein.target}g`
         );

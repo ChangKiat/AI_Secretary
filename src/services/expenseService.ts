@@ -116,9 +116,10 @@ export function formatExpenseLogReply(
     category: string,
     description?: string,
     expenseId?: number,
-    paymentMethod?: string | null
+    paymentMethod?: string | null,
+    headerPrefix = '✅ Logged'
 ): string {
-    const header = expenseId != null ? `✅ Logged #${expenseId}` : '✅ Logged';
+    const header = expenseId != null ? `${headerPrefix} #${expenseId}` : headerPrefix;
     const lines = [
         header,
         `📅 Date: ${date}`,
@@ -385,6 +386,22 @@ export async function updateExpense(
 
     const result = await db.update(expenses).set(set).where(eq(expenses.id, id));
     return (result.count ?? 0) > 0;
+}
+
+export async function getExpenseById(id: number) {
+    const db = requireDb();
+    const rows = await db.select().from(expenses).where(eq(expenses.id, id)).limit(1);
+    const row = rows[0];
+    if (!row) return null;
+    return {
+        id: row.id,
+        date: row.date,
+        amount: parseFloat(row.amount),
+        currency: row.currency,
+        category: resolveCategory(row.category),
+        description: row.description,
+        paymentMethod: row.paymentMethod ? resolvePaymentMethod(row.paymentMethod) : null,
+    };
 }
 
 export async function deleteExpense(id: number): Promise<boolean> {

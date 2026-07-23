@@ -4,7 +4,7 @@ import { message } from 'telegraf/filters';
 import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
 import 'dotenv/config';
 import { appendExpense, getFixedExpensesForToday } from './services/expenseService';
-import { upsertInvestmentFundingTransfer } from './services/incomeService';
+import { upsertInvestmentFundingTransfer, resolveReplyRecord } from './services/incomeService';
 import { ChatSession } from '@google/generative-ai';
 import { handleToolCall } from './tools/toolHandler';
 import { formatBulkWorkoutLogReply } from './services/gymService';
@@ -15,8 +15,11 @@ import {
 } from './config/gemini';
 import { loadExpenseCategories } from './config/expenseCategories';
 import { loadPaymentAccounts } from './config/paymentMethods';
-import { updateProteinTarget, updateNutritionTargets } from './services/nutritionService';
-import { resolveReplyToExpenseId } from './services/incomeService';
+import {
+    getMealById,
+    updateProteinTarget,
+    updateNutritionTargets,
+} from './services/nutritionService';
 import { parseMaxPx, resizeForGemini } from './utils/imageForGemini';
 import cron from 'node-cron';
 
@@ -178,17 +181,30 @@ function getReplyToText(ctx: import('telegraf').Context): string | undefined {
     return undefined;
 }
 
-async function buildReplyExpenseContext(ctx: import('telegraf').Context): Promise<{
+async function buildReplyRecordContext(ctx: import('telegraf').Context): Promise<{
     replyToExpenseId?: number;
+    replyTarget?: import('./services/incomeService').ReplyRecordTarget;
     promptHint: string;
 }> {
     const replyText = getReplyToText(ctx);
     if (!replyText) return { promptHint: '' };
-    const expenseId = await resolveReplyToExpenseId(replyText);
-    if (!expenseId) return { promptHint: '' };
+    const userId = ctx.from?.id;
+    const target = await resolveReplyRecord(replyText, async (mealId) => {
+        if (userId == null) return false;
+        return (await getMealById(mealId, userId)) != null;
+    });
+    if (!target) return { promptHint: '' };
+
+    const editHint =
+        `For corrections use edit_${target.type}/delete_${target.type} with this id.`;
+    const expenseExtra =
+        target.type === 'expense'
+            ? ' If they report a reimbursement, use log_income linked to this expense.'
+            : '';
     return {
-        replyToExpenseId: expenseId,
-        promptHint: `\n[REPLY CONTEXT] User is replying to expense #${expenseId}. Link any reimbursement via log_income to this expense.`,
+        replyToExpenseId: target.type === 'expense' ? target.id : undefined,
+        replyTarget: target,
+        promptHint: `\n[REPLY CONTEXT] User is replying to ${target.type} #${target.id}. ${editHint}${expenseExtra}`,
     };
 }
 
@@ -447,7 +463,7 @@ bot.on(message('text'), async (ctx) => {
 
     try {
         const session = getOrCreateSession(userId);
-        const replyCtx = await buildReplyExpenseContext(ctx);
+        const replyCtx = await buildReplyRecordContext(ctx);
         const prompt =
             buildContextPrompt(userMessage) + replyCtx.promptHint + getTextFoodPrompt(userMessage);
         await runChatTurn(
@@ -455,7 +471,10 @@ bot.on(message('text'), async (ctx) => {
             ctx,
             prompt,
             userId,
-            { replyToExpenseId: replyCtx.replyToExpenseId },
+            {
+                replyToExpenseId: replyCtx.replyToExpenseId,
+                replyTarget: replyCtx.replyTarget,
+            },
             true
         );
     } catch (error: any) {
@@ -507,7 +526,7 @@ bot.on(message('voice'), async (ctx) => {
         const audioBuffer = await fetchTelegramFile(voice.file_id);
         const audioPart = await buildGeminiFilePart(audioBuffer, 'audio/ogg');
         const chat = defaultModel.startChat();
-        const replyCtx = await buildReplyExpenseContext(ctx);
+        const replyCtx = await buildReplyRecordContext(ctx);
         const voicePrompt =
             buildContextPrompt('') +
             replyCtx.promptHint +
@@ -518,7 +537,11 @@ bot.on(message('voice'), async (ctx) => {
             ctx,
             [audioPart, voicePrompt],
             ctx.from.id,
-            { isVoiceInput: true, replyToExpenseId: replyCtx.replyToExpenseId }
+            {
+                isVoiceInput: true,
+                replyToExpenseId: replyCtx.replyToExpenseId,
+                replyTarget: replyCtx.replyTarget,
+            }
         );
     } catch (error) {
         console.error('Error processing voice:', error);

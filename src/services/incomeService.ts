@@ -138,11 +138,36 @@ export async function findRecentExpenseByDescription(keyword: string): Promise<n
     return matches[0]?.id ?? null;
 }
 
+export type ReplyRecordType = 'expense' | 'income' | 'meal';
+
+export interface ReplyRecordTarget {
+    type: ReplyRecordType;
+    id: number;
+}
+
+/** Parse confirmation text shape; order matters so income ≠ expense. */
+export function parseReplyRecordFromBotReply(text: string): ReplyRecordTarget | null {
+    const incomeMatch = text.match(/(?:Logged|Updated) income #(\d+)/i);
+    if (incomeMatch) {
+        const id = parseInt(incomeMatch[1], 10);
+        return id > 0 ? { type: 'income', id } : null;
+    }
+    const expenseMatch = text.match(/(?:Logged|Updated)(?: expense)? #(\d+)/i);
+    if (expenseMatch) {
+        const id = parseInt(expenseMatch[1], 10);
+        return id > 0 ? { type: 'expense', id } : null;
+    }
+    const mealMatch = text.match(/#️⃣ ID:\s*(\d+)/);
+    if (mealMatch) {
+        const id = parseInt(mealMatch[1], 10);
+        return id > 0 ? { type: 'meal', id } : null;
+    }
+    return null;
+}
+
 export function parseExpenseIdFromBotReply(text: string): number | null {
-    const match = text.match(/#(\d+)/);
-    if (!match) return null;
-    const id = parseInt(match[1], 10);
-    return id > 0 ? id : null;
+    const parsed = parseReplyRecordFromBotReply(text);
+    return parsed?.type === 'expense' ? parsed.id : null;
 }
 
 export async function expenseExists(id: number): Promise<boolean> {
@@ -151,10 +176,53 @@ export async function expenseExists(id: number): Promise<boolean> {
     return rows.length > 0;
 }
 
+export async function incomeExists(id: number): Promise<boolean> {
+    const db = requireDb();
+    const rows = await db.select({ id: incomes.id }).from(incomes).where(eq(incomes.id, id));
+    return rows.length > 0;
+}
+
+export async function getIncomeById(id: number) {
+    const db = requireDb();
+    const rows = await db.select().from(incomes).where(eq(incomes.id, id)).limit(1);
+    const row = rows[0];
+    if (!row) return null;
+    return {
+        id: row.id,
+        date: row.date,
+        amount: parseFloat(row.amount),
+        currency: row.currency,
+        category: resolveIncomeCategory(row.category),
+        description: row.description,
+        source: row.source,
+        expenseId: row.expenseId,
+        paymentMethod: row.paymentMethod ? resolvePaymentMethod(row.paymentMethod) : null,
+        fromPaymentMethod: row.fromPaymentMethod
+            ? resolvePaymentMethod(row.fromPaymentMethod)
+            : null,
+    };
+}
+
 export async function resolveReplyToExpenseId(text: string): Promise<number | undefined> {
     const parsed = parseExpenseIdFromBotReply(text);
     if (parsed == null) return undefined;
     return (await expenseExists(parsed)) ? parsed : undefined;
+}
+
+export async function resolveReplyRecord(
+    text: string,
+    mealExists?: (id: number) => Promise<boolean>
+): Promise<ReplyRecordTarget | undefined> {
+    const parsed = parseReplyRecordFromBotReply(text);
+    if (!parsed) return undefined;
+    if (parsed.type === 'expense') {
+        return (await expenseExists(parsed.id)) ? parsed : undefined;
+    }
+    if (parsed.type === 'income') {
+        return (await incomeExists(parsed.id)) ? parsed : undefined;
+    }
+    if (mealExists && !(await mealExists(parsed.id))) return undefined;
+    return parsed;
 }
 
 export async function getReimbursementsByExpenseIds(
@@ -358,13 +426,17 @@ export function formatIncomeLogReply(
     currency: string,
     category: string,
     description: string,
+    incomeId?: number,
     source?: string,
     linkedExpense?: boolean,
     paymentMethod?: string | null,
-    fromPaymentMethod?: string | null
+    fromPaymentMethod?: string | null,
+    headerPrefix = '✅ Logged income'
 ): string {
+    const header =
+        incomeId != null ? `${headerPrefix} #${incomeId}` : headerPrefix;
     const lines = [
-        '✅ Logged income',
+        header,
         `📅 Date: ${date}`,
         `💵 Amount: ${currency || 'MYR'} ${amount}`,
         `📁 Category: ${resolveIncomeCategory(category)}`,
@@ -403,7 +475,7 @@ export function formatSharedExpenseReply(
     return lines.join('\n');
 }
 
-// ponytail self-check: net math for shared bill
+// ponytail self-check: net math for shared bill + reply parse
 if (require.main === module) {
     const gross = 57;
     const reimb = [{ source: 'A', amount: 20 }, { source: 'B', amount: 20 }];
@@ -415,8 +487,44 @@ if (require.main === module) {
     if (!reply.includes('#57')) throw new Error('shared expense reply missing id');
     const parsed = parseExpenseIdFromBotReply('✅ Logged #57\n📅 Date: 2026-06-29');
     if (parsed !== 57) throw new Error(`expected parsed id 57, got ${parsed}`);
-    if (validateIncomePaymentAccounts('Account transfer', 'TnG', null)) {
+    if (!validateIncomePaymentAccounts('Account transfer', 'TnG', null)) {
         throw new Error('account transfer validation should fail without from');
     }
+
+    const incomeFmt = formatIncomeLogReply(
+        '2026-06-29',
+        100,
+        'MYR',
+        'Salary',
+        'June pay',
+        42
+    );
+    if (!incomeFmt.includes('Logged income #42')) {
+        throw new Error(`income format missing #id: ${incomeFmt}`);
+    }
+
+    const expenseTarget = parseReplyRecordFromBotReply('✅ Logged #57\n📅 Date: 2026-06-29');
+    if (expenseTarget?.type !== 'expense' || expenseTarget.id !== 57) {
+        throw new Error(`expected expense #57, got ${JSON.stringify(expenseTarget)}`);
+    }
+    const sharedTarget = parseReplyRecordFromBotReply(reply);
+    if (sharedTarget?.type !== 'expense' || sharedTarget.id !== 57) {
+        throw new Error(`expected shared expense #57, got ${JSON.stringify(sharedTarget)}`);
+    }
+    const incomeTarget = parseReplyRecordFromBotReply(incomeFmt);
+    if (incomeTarget?.type !== 'income' || incomeTarget.id !== 42) {
+        throw new Error(`expected income #42, got ${JSON.stringify(incomeTarget)}`);
+    }
+    const mealTarget = parseReplyRecordFromBotReply(
+        '✅ Logged\n📅 Date: 2026-06-29\n#️⃣ ID: 9\n📝 Description: chicken rice'
+    );
+    if (mealTarget?.type !== 'meal' || mealTarget.id !== 9) {
+        throw new Error(`expected meal #9, got ${JSON.stringify(mealTarget)}`);
+    }
+    const updatedIncome = parseReplyRecordFromBotReply('✅ Updated income #42\n📅 Date: 2026-06-29');
+    if (updatedIncome?.type !== 'income' || updatedIncome.id !== 42) {
+        throw new Error(`expected updated income #42, got ${JSON.stringify(updatedIncome)}`);
+    }
+
     console.log('incomeService self-check ok');
 }
