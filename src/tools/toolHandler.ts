@@ -37,6 +37,7 @@ import {
     formatWorkoutLogReply,
     formatBulkWorkoutLogReply,
     applyWorkoutDefaults,
+    normalizeWeightsKg,
     WorkoutLogEntry,
 } from '../services/gymService';
 import { estimateBurn } from '../services/burnCalculator';
@@ -124,8 +125,10 @@ interface WorkoutArgs {
     sets?: number;
     reps?: number;
     weightKg?: number;
+    weightsKg?: number[];
     durationMin?: number;
     notes?: string;
+    supersetGroup?: number;
 }
 
 async function buildWorkoutEntry(
@@ -133,23 +136,26 @@ async function buildWorkoutEntry(
     date: string,
     bodyWeightKg: number | null
 ): Promise<WorkoutLogEntry> {
+    const normalized = normalizeWeightsKg(args.weightsKg, args.weightKg, args.sets);
     const burn = estimateBurn(
         args.exercise,
         args.durationMin,
-        args.sets,
+        normalized.sets,
         args.reps,
-        args.weightKg,
+        normalized.topWeightKg,
         bodyWeightKg
     );
 
     return {
         date,
         exercise: args.exercise,
-        sets: args.sets,
+        sets: normalized.sets,
         reps: args.reps,
-        weightKg: args.weightKg,
+        weightKg: normalized.topWeightKg,
+        weightsKgText: normalized.weightsKgText,
         durationMin: args.durationMin,
         notes: args.notes,
+        supersetGroup: args.supersetGroup ?? null,
         burn: burn ?? null,
     };
 }
@@ -167,15 +173,17 @@ async function processWorkoutLog(
         userId,
         date,
         args.exercise,
-        args.sets,
+        entry.sets,
         args.reps,
-        args.weightKg,
+        entry.weightKg,
         args.durationMin,
         args.notes,
         entry.burn?.caloriesBurned ?? null,
         entry.burn?.fatBurnG ?? null,
         sessionId,
-        sessionLabel
+        sessionLabel,
+        entry.weightsKgText,
+        entry.supersetGroup
     );
     return entry;
 }
@@ -686,9 +694,10 @@ export async function handleToolCall(
         } else {
             await ctx.reply(
                 formatWorkoutLogReply(date, args.exercise, {
-                    sets: args.sets,
+                    sets: entry.sets,
                     reps: args.reps,
-                    weightKg: args.weightKg,
+                    weightKg: entry.weightKg,
+                    weightsKgText: entry.weightsKgText,
                     durationMin: args.durationMin,
                     notes: args.notes,
                     burn: entry.burn ?? null,
@@ -725,10 +734,12 @@ export async function handleToolCall(
                 sets: entry.sets,
                 reps: entry.reps,
                 weightKg: entry.weightKg,
+                weightsKgText: entry.weightsKgText,
                 durationMin: entry.durationMin,
                 notes: entry.notes,
                 caloriesBurned: entry.burn?.caloriesBurned ?? null,
                 fatBurnG: entry.burn?.fatBurnG ?? null,
+                supersetGroup: entry.supersetGroup,
             })),
             sessionId,
             sessionLabel

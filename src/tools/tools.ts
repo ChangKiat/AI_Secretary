@@ -355,15 +355,21 @@ export const checkScheduleDeclaration: FunctionDeclaration = {
 export const logWorkoutDeclaration: FunctionDeclaration = {
     name: 'log_workout',
     description:
-        'Logs a SINGLE gym exercise. Use only when the user reports one exercise. For 2+ exercises in one message, use log_bulk_workouts instead—never call log_workout multiple times.',
+        'Logs a SINGLE gym exercise. Use only when the user reports one exercise. For 2+ exercises in one message, use log_bulk_workouts instead—never call log_workout multiple times. Progressive loads like "10/20/30kg" → weightsKg array (not a single average).',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
             date: { type: SchemaType.STRING, description: 'YYYY-MM-DD. Use receipt/context date, not today unless specified.' },
             exercise: { type: SchemaType.STRING, description: 'Exercise name e.g. Bench Press, Squat.' },
-            sets: { type: SchemaType.NUMBER, description: 'Number of sets.' },
-            reps: { type: SchemaType.NUMBER, description: 'Reps per set.' },
-            weightKg: { type: SchemaType.NUMBER, description: 'Weight in kg.' },
+            sets: { type: SchemaType.NUMBER, description: 'Number of sets. Inferred from weightsKg length when omitted.' },
+            reps: { type: SchemaType.NUMBER, description: 'Reps per set (same across progressive sets).' },
+            weightKg: { type: SchemaType.NUMBER, description: 'Flat weight in kg when all sets use the same load.' },
+            weightsKg: {
+                type: SchemaType.ARRAY,
+                description:
+                    'Progressive set weights in kg, e.g. [10,20,30] for "squat 10/20/30kg". Prefer over weightKg when loads differ by set.',
+                items: { type: SchemaType.NUMBER },
+            },
             durationMin: { type: SchemaType.NUMBER, description: 'Duration in minutes. Use decimals for sub-minute holds (e.g. 0.5 for 30 sec plank).' },
             notes: { type: SchemaType.STRING, description: 'Optional notes.' },
         },
@@ -374,7 +380,7 @@ export const logWorkoutDeclaration: FunctionDeclaration = {
 export const logBulkWorkoutsDeclaration: FunctionDeclaration = {
     name: 'log_bulk_workouts',
     description:
-        'Logs multiple exercises from one workout session in a single call. Use when the user lists 2+ exercises with shared sets/reps and/or names the day (push day, shoulder + abs). Do NOT call log_workout repeatedly.',
+        'Logs multiple exercises from one workout session in a single call. Use when the user lists 2+ exercises, supersets (A + B), or shared sets/reps. Progressive "10/20/30kg" → weightsKg. Superset pair → same supersetGroup on both. Do NOT call log_workout repeatedly.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -404,9 +410,19 @@ export const logBulkWorkoutsDeclaration: FunctionDeclaration = {
                         exercise: { type: SchemaType.STRING, description: 'Exercise name e.g. Squat, Deadlift.' },
                         sets: { type: SchemaType.NUMBER, description: 'Number of sets.' },
                         reps: { type: SchemaType.NUMBER, description: 'Reps per set.' },
-                        weightKg: { type: SchemaType.NUMBER, description: 'Weight in kg.' },
+                        weightKg: { type: SchemaType.NUMBER, description: 'Flat weight in kg.' },
+                        weightsKg: {
+                            type: SchemaType.ARRAY,
+                            description: 'Progressive set weights e.g. [10,20,30].',
+                            items: { type: SchemaType.NUMBER },
+                        },
                         durationMin: { type: SchemaType.NUMBER, description: 'Duration in minutes.' },
-                        notes: { type: SchemaType.STRING, description: 'Optional notes e.g. superset.' },
+                        notes: { type: SchemaType.STRING, description: 'Optional notes.' },
+                        supersetGroup: {
+                            type: SchemaType.NUMBER,
+                            description:
+                                'Same integer pairs exercises as a superset (e.g. squat + leg press both use 1).',
+                        },
                         date: { type: SchemaType.STRING, description: 'Optional per-exercise date YYYY-MM-DD. Defaults to top-level date.' },
                     },
                     required: ['exercise'],

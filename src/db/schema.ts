@@ -66,12 +66,14 @@ export const workouts = pgTable('workouts', {
     sets: integer('sets'),
     reps: integer('reps'),
     weightKg: numeric('weight_kg', { precision: 8, scale: 2 }),
+    weightsKg: text('weights_kg'),
     durationMin: numeric('duration_min', { precision: 8, scale: 2 }),
     notes: text('notes'),
     caloriesBurned: numeric('calories_burned', { precision: 8, scale: 2 }),
     fatBurnedG: numeric('fat_burned_g', { precision: 8, scale: 2 }),
     sessionId: text('session_id'),
     sessionLabel: text('session_label'),
+    supersetGroup: integer('superset_group'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

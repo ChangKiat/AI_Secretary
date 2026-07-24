@@ -8,8 +8,12 @@ export interface WorkoutLogEntry {
     sets?: number;
     reps?: number;
     weightKg?: number;
+    /** Slash progressive loads e.g. "10/20/30" when length > 1. */
+    weightsKgText?: string | null;
     durationMin?: number;
     notes?: string;
+    /** Same value within a session pairs exercises as a superset. */
+    supersetGroup?: number | null;
     burn?: { caloriesBurned: number; fatBurnG: number } | null;
 }
 
@@ -20,12 +24,14 @@ export interface WorkoutExerciseRecord {
     sets: number | null;
     reps: number | null;
     weightKg: number | null;
+    weightsKgText: string | null;
     durationMin: number | null;
     notes: string | null;
     caloriesBurned: number | null;
     fatBurnG: number | null;
     sessionId: string | null;
     sessionLabel: string | null;
+    supersetGroup: number | null;
 }
 
 export interface WorkoutSessionGroup {
@@ -37,18 +43,69 @@ export interface WorkoutSessionGroup {
     totalFatBurnG: number;
 }
 
-function formatWorkoutDetail(entry: Pick<WorkoutLogEntry, 'sets' | 'reps' | 'weightKg' | 'durationMin'>): string {
+/** Progressive [10,20,30] → text + top set; flat weightKg unchanged. */
+export function normalizeWeightsKg(
+    weightsKg?: number[],
+    weightKg?: number,
+    sets?: number
+): { weightsKgText: string | null; topWeightKg: number | undefined; sets: number | undefined } {
+    const cleaned = (weightsKg ?? []).filter((w) => typeof w === 'number' && !Number.isNaN(w) && w > 0);
+    if (cleaned.length > 1) {
+        return {
+            weightsKgText: cleaned.join('/'),
+            topWeightKg: cleaned[cleaned.length - 1],
+            // ponytail: slash list defines set count; upgrade path = explicit per-set override
+            sets: cleaned.length,
+        };
+    }
+    if (cleaned.length === 1) {
+        return {
+            weightsKgText: null,
+            topWeightKg: cleaned[0],
+            sets,
+        };
+    }
+    return {
+        weightsKgText: null,
+        topWeightKg: weightKg,
+        sets,
+    };
+}
+
+function formatWorkoutDetail(
+    entry: Pick<
+        WorkoutLogEntry,
+        'sets' | 'reps' | 'weightKg' | 'weightsKgText' | 'durationMin'
+    >
+): string {
+    const weightPart = entry.weightsKgText
+        ? `${entry.weightsKgText}kg`
+        : entry.weightKg
+          ? `${entry.weightKg}kg`
+          : null;
     return [
-        entry.sets && entry.reps ? `${entry.sets}x${entry.reps}` : entry.sets ? `${entry.sets} sets` : null,
+        entry.sets && entry.reps
+            ? `${entry.sets}x${entry.reps}`
+            : entry.sets
+              ? `${entry.sets} sets`
+              : null,
         entry.durationMin != null
             ? entry.durationMin < 1
                 ? `${Math.round(entry.durationMin * 60)}sec`
                 : `${entry.durationMin}min`
             : null,
-        entry.weightKg ? `${entry.weightKg}kg` : null,
+        weightPart,
     ]
         .filter(Boolean)
         .join(' @ ');
+}
+
+function formatExerciseBulletPart(entry: WorkoutLogEntry): string {
+    const detail = formatWorkoutDetail(entry);
+    let part = entry.exercise;
+    if (detail) part += ` — ${detail}`;
+    if (entry.notes) part += ` (${entry.notes})`;
+    return part;
 }
 
 export function applyWorkoutDefaults<T extends { sets?: number; reps?: number }>(
@@ -71,16 +128,21 @@ function mapRowToExercise(row: typeof workouts.$inferSelect): WorkoutExerciseRec
         sets: row.sets,
         reps: row.reps,
         weightKg: row.weightKg ? parseFloat(row.weightKg) : null,
+        weightsKgText: row.weightsKg ?? null,
         durationMin: row.durationMin ? parseFloat(row.durationMin) : null,
         notes: row.notes,
         caloriesBurned: row.caloriesBurned ? parseFloat(row.caloriesBurned) : null,
         fatBurnG: row.fatBurnedG ? parseFloat(row.fatBurnedG) : null,
         sessionId: row.sessionId,
         sessionLabel: row.sessionLabel,
+        supersetGroup: row.supersetGroup ?? null,
     };
 }
 
-function sumBurn(exercises: WorkoutExerciseRecord[]): { totalCaloriesBurned: number; totalFatBurnG: number } {
+function sumBurn(exercises: WorkoutExerciseRecord[]): {
+    totalCaloriesBurned: number;
+    totalFatBurnG: number;
+} {
     let totalCaloriesBurned = 0;
     let totalFatBurnG = 0;
     for (const ex of exercises) {
@@ -146,6 +208,7 @@ export function formatWorkoutLogReply(
         sets?: number;
         reps?: number;
         weightKg?: number;
+        weightsKgText?: string | null;
         durationMin?: number;
         notes?: string;
         burn?: { caloriesBurned: number; fatBurnG: number } | null;
@@ -166,6 +229,7 @@ export function formatWorkoutLogReply(
     return lines.join('\n');
 }
 
+/** Join consecutive same-supersetGroup entries with " + ". */
 export function formatBulkWorkoutLogReply(
     date: string,
     entries: WorkoutLogEntry[],
@@ -174,12 +238,28 @@ export function formatBulkWorkoutLogReply(
     const lines = ['✅ Logged', `📅 Date: ${date}`];
     if (sessionLabel) lines.push(`📋 Session: ${sessionLabel}`);
     lines.push('');
-    for (const entry of entries) {
-        const detail = formatWorkoutDetail(entry);
-        let line = `• ${entry.exercise}`;
-        if (detail) line += ` — ${detail}`;
-        if (entry.notes) line += ` (${entry.notes})`;
-        lines.push(line);
+
+    let i = 0;
+    while (i < entries.length) {
+        const entry = entries[i];
+        const group = entry.supersetGroup;
+        if (group != null) {
+            const peers = [entry];
+            let j = i + 1;
+            while (j < entries.length && entries[j].supersetGroup === group) {
+                peers.push(entries[j]);
+                j++;
+            }
+            if (peers.length > 1) {
+                lines.push(`• ${peers.map(formatExerciseBulletPart).join(' + ')}`);
+            } else {
+                lines.push(`• ${formatExerciseBulletPart(entry)}`);
+            }
+            i = j;
+        } else {
+            lines.push(`• ${formatExerciseBulletPart(entry)}`);
+            i++;
+        }
     }
 
     let totalCal = 0;
@@ -216,7 +296,9 @@ export async function logWorkout(
     caloriesBurned?: number | null,
     fatBurnG?: number | null,
     sessionId?: string | null,
-    sessionLabel?: string | null
+    sessionLabel?: string | null,
+    weightsKgText?: string | null,
+    supersetGroup?: number | null
 ) {
     const db = requireDb();
     const row = {
@@ -226,12 +308,14 @@ export async function logWorkout(
         sets: sets ?? null,
         reps: reps ?? null,
         weightKg: weightKg != null ? String(weightKg) : null,
+        weightsKg: weightsKgText ?? null,
         durationMin: durationMin != null ? String(durationMin) : null,
         notes: notes ?? null,
         caloriesBurned: caloriesBurned != null ? String(caloriesBurned) : null,
         fatBurnedG: fatBurnG != null ? String(fatBurnG) : null,
         sessionId: sessionId ?? null,
         sessionLabel: sessionLabel ?? null,
+        supersetGroup: supersetGroup ?? null,
     };
     await db.insert(workouts).values(row);
 }
@@ -244,10 +328,12 @@ export async function logBulkWorkouts(
         sets?: number;
         reps?: number;
         weightKg?: number;
+        weightsKgText?: string | null;
         durationMin?: number;
         notes?: string;
         caloriesBurned?: number | null;
         fatBurnG?: number | null;
+        supersetGroup?: number | null;
     }[],
     sessionId?: string | null,
     sessionLabel?: string | null
@@ -261,12 +347,14 @@ export async function logBulkWorkouts(
             sets: w.sets ?? null,
             reps: w.reps ?? null,
             weightKg: w.weightKg != null ? String(w.weightKg) : null,
+            weightsKg: w.weightsKgText ?? null,
             durationMin: w.durationMin != null ? String(w.durationMin) : null,
             notes: w.notes ?? null,
             caloriesBurned: w.caloriesBurned != null ? String(w.caloriesBurned) : null,
             fatBurnedG: w.fatBurnG != null ? String(w.fatBurnG) : null,
             sessionId: sessionId ?? null,
             sessionLabel: sessionLabel ?? null,
+            supersetGroup: w.supersetGroup ?? null,
         }))
     );
 }
@@ -350,12 +438,14 @@ export async function updateWorkout(
         sets?: number | null;
         reps?: number | null;
         weightKg?: number | null;
+        weightsKgText?: string | null;
         durationMin?: number | null;
         notes?: string | null;
         caloriesBurned?: number | null;
         fatBurnG?: number | null;
         sessionId?: string | null;
         sessionLabel?: string | null;
+        supersetGroup?: number | null;
     }
 ): Promise<boolean> {
     const db = requireDb();
@@ -368,6 +458,7 @@ export async function updateWorkout(
     if (fields.weightKg !== undefined) {
         set.weightKg = fields.weightKg != null ? String(fields.weightKg) : null;
     }
+    if (fields.weightsKgText !== undefined) set.weightsKg = fields.weightsKgText;
     if (fields.durationMin !== undefined) {
         set.durationMin = fields.durationMin != null ? String(fields.durationMin) : null;
     }
@@ -381,6 +472,7 @@ export async function updateWorkout(
     }
     if (fields.sessionId !== undefined) set.sessionId = fields.sessionId;
     if (fields.sessionLabel !== undefined) set.sessionLabel = fields.sessionLabel;
+    if (fields.supersetGroup !== undefined) set.supersetGroup = fields.supersetGroup;
 
     if (Object.keys(set).length === 0) return false;
 
@@ -399,6 +491,19 @@ export async function deleteWorkout(id: number, telegramUserId: number): Promise
         .where(and(eq(workouts.id, id), eq(workouts.telegramUserId, telegramUserId)));
 
     return (result.count ?? 0) > 0;
+}
+
+export async function deleteWorkoutsBySessionId(
+    sessionId: string,
+    telegramUserId: number
+): Promise<number> {
+    const db = requireDb();
+    const result = await db
+        .delete(workouts)
+        .where(
+            and(eq(workouts.sessionId, sessionId), eq(workouts.telegramUserId, telegramUserId))
+        );
+    return result.count ?? 0;
 }
 
 export async function getRecentWorkoutsForSuggestion(
@@ -421,7 +526,7 @@ export async function getRecentWorkoutsForSuggestion(
     return { history, exerciseCounts, daysBack };
 }
 
-// ponytail self-check: defaults + session grouping without DB
+// ponytail self-check: defaults + progressive weights + supersets without DB
 if (require.main === module) {
     const withDefaults = applyWorkoutDefaults(
         { exercise: 'Shoulder press', weightKg: 15 } as WorkoutLogEntry,
@@ -432,6 +537,19 @@ if (require.main === module) {
         throw new Error('applyWorkoutDefaults failed');
     }
 
+    const progressive = normalizeWeightsKg([10, 20, 30], undefined, undefined);
+    if (
+        progressive.weightsKgText !== '10/20/30' ||
+        progressive.topWeightKg !== 30 ||
+        progressive.sets !== 3
+    ) {
+        throw new Error(`normalizeWeightsKg failed: ${JSON.stringify(progressive)}`);
+    }
+    const flat = normalizeWeightsKg(undefined, 60, 4);
+    if (flat.weightsKgText != null || flat.topWeightKg !== 60 || flat.sets !== 4) {
+        throw new Error(`normalizeWeightsKg flat failed: ${JSON.stringify(flat)}`);
+    }
+
     const exercises: WorkoutExerciseRecord[] = [
         {
             id: 1,
@@ -440,12 +558,14 @@ if (require.main === module) {
             sets: 4,
             reps: 12,
             weightKg: 15,
+            weightsKgText: null,
             durationMin: null,
             notes: null,
             caloriesBurned: 50,
             fatBurnG: 5,
             sessionId: 'sess-1',
             sessionLabel: 'Shoulder + Abs day',
+            supersetGroup: null,
         },
         {
             id: 2,
@@ -454,12 +574,14 @@ if (require.main === module) {
             sets: 4,
             reps: 12,
             weightKg: null,
+            weightsKgText: null,
             durationMin: null,
             notes: null,
             caloriesBurned: 30,
             fatBurnG: 3,
             sessionId: 'sess-1',
             sessionLabel: 'Shoulder + Abs day',
+            supersetGroup: null,
         },
         {
             id: 3,
@@ -468,12 +590,14 @@ if (require.main === module) {
             sets: 3,
             reps: 8,
             weightKg: 60,
+            weightsKgText: null,
             durationMin: null,
             notes: null,
             caloriesBurned: 40,
             fatBurnG: 4,
             sessionId: null,
             sessionLabel: null,
+            supersetGroup: null,
         },
     ];
 
@@ -484,5 +608,26 @@ if (require.main === module) {
     if (countWorkoutSessions(exercises) !== 2) {
         throw new Error('countWorkoutSessions expected 2');
     }
+
+    const bulk = formatBulkWorkoutLogReply('2026-06-29', [
+        {
+            date: '2026-06-29',
+            exercise: 'Squat',
+            sets: 3,
+            weightsKgText: '10/20/30',
+            weightKg: 30,
+            supersetGroup: 1,
+        },
+        {
+            date: '2026-06-29',
+            exercise: 'Leg press',
+            weightKg: 10,
+            supersetGroup: 1,
+        },
+    ]);
+    if (!bulk.includes('Squat — 3 sets @ 10/20/30kg + Leg press — 10kg')) {
+        throw new Error(`superset format failed:\n${bulk}`);
+    }
+
     console.log('gymService self-check ok');
 }

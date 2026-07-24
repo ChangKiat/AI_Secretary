@@ -91,12 +91,14 @@ CREATE TABLE IF NOT EXISTS workouts (
     sets INTEGER,
     reps INTEGER,
     weight_kg NUMERIC(8, 2),
+    weights_kg TEXT,
     duration_min NUMERIC(8, 2),
     notes TEXT,
     calories_burned NUMERIC(8, 2),
     fat_burned_g NUMERIC(8, 2),
     session_id TEXT,
     session_label TEXT,
+    superset_group INTEGER,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
