@@ -188,6 +188,55 @@ async function processWorkoutLog(
     return entry;
 }
 
+const KNOWN_TOOL_NAMES = new Set([
+    'log_expense',
+    'log_income',
+    'edit_expense',
+    'delete_expense',
+    'edit_income',
+    'delete_income',
+    'get_spending_summary',
+    'add_fixed_expense',
+    'update_fixed_expense',
+    'get_all_fixed_expenses',
+    'delete_fixed_expense',
+    'create_calendar_event',
+    'check_schedule',
+    'log_bulk_expenses',
+    'log_workout',
+    'log_bulk_workouts',
+    'get_workout_summary',
+    'get_workout_history',
+    'suggest_workout',
+    'log_meal',
+    'get_meal_history',
+    'edit_meal',
+    'delete_meal',
+    'get_nutrition_summary',
+    'suggest_meal',
+    'upsert_budget',
+    'get_budgets',
+    'update_user_settings',
+]);
+
+/** Gemini sometimes invents PascalCase / duplicated names (e.g. LogBulkExpensesExpenses). */
+export function resolveToolName(raw: string): string {
+    if (KNOWN_TOOL_NAMES.has(raw)) return raw;
+    let snake = raw
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+        .toLowerCase()
+        .replace(/_+/g, '_');
+    if (KNOWN_TOOL_NAMES.has(snake)) return snake;
+    const parts = snake.split('_').filter(Boolean);
+    const collapsed: string[] = [];
+    for (const p of parts) {
+        if (collapsed[collapsed.length - 1] !== p) collapsed.push(p);
+    }
+    snake = collapsed.join('_');
+    return KNOWN_TOOL_NAMES.has(snake) ? snake : snake;
+}
+
 export async function handleToolCall(
     call: FunctionCall,
     chat: ChatSession,
@@ -195,6 +244,11 @@ export async function handleToolCall(
     options?: ToolCallOptions
 ): Promise<ToolCallResult> {
     const userId = getUserId(ctx);
+    const rawName = call.name;
+    const resolvedName = resolveToolName(rawName);
+    if (resolvedName !== rawName && KNOWN_TOOL_NAMES.has(resolvedName)) {
+        (call as { name: string }).name = resolvedName;
+    }
 
     if (call.name === 'log_expense') {
         const { date, amount, currency, category, description, reimbursements, paymentMethod } =
@@ -657,8 +711,32 @@ export async function handleToolCall(
         await ctx.reply(nextResult.response.text());
         return 'complete';
     } else if (call.name === 'log_bulk_expenses') {
-        const expensesArray = (call.args as any).expenses;
-        await logBulkExpenses(expensesArray);
+        const args = call.args as Record<string, unknown>;
+        let expensesArray = (args.expenses ?? args.Expenses) as unknown;
+        if (!Array.isArray(expensesArray) && typeof args.amount === 'number') {
+            expensesArray = [args];
+        }
+        if (!Array.isArray(expensesArray) || expensesArray.length === 0) {
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'log_bulk_expenses',
+                        response: { status: 'error', message: 'missing expenses array' },
+                    },
+                },
+            ]);
+            await ctx.reply('⚠️ Could not read any expenses from that image. Try again or send as text.');
+            return 'complete';
+        }
+        await logBulkExpenses(expensesArray as Parameters<typeof logBulkExpenses>[0]);
+        await chat.sendMessage([
+            {
+                functionResponse: {
+                    name: 'log_bulk_expenses',
+                    response: { status: 'success', count: expensesArray.length },
+                },
+            },
+        ]);
         await ctx.reply(
             `✅ Successfully scanned the statement and logged ${expensesArray.length} expenses!`
         );
@@ -1064,5 +1142,31 @@ export async function handleToolCall(
         return 'complete';
     }
 
+    await chat.sendMessage([
+        {
+            functionResponse: {
+                name: call.name,
+                response: { status: 'error', message: `unknown tool: ${call.name}` },
+            },
+        },
+    ]).catch(() => undefined);
+    await ctx.reply(
+        `⚠️ I tried an unknown action (${call.name}). Please resend — for a single receipt say "receipt" or list the amount.`
+    );
     return 'complete';
 }
+
+// ponytail self-check: Gemini hallucinated tool names
+if (require.main === module) {
+    if (resolveToolName('LogBulkExpensesExpenses') !== 'log_bulk_expenses') {
+        throw new Error('expected LogBulkExpensesExpenses → log_bulk_expenses');
+    }
+    if (resolveToolName('log_expense') !== 'log_expense') {
+        throw new Error('expected log_expense unchanged');
+    }
+    if (resolveToolName('LogExpense') !== 'log_expense') {
+        throw new Error('expected LogExpense → log_expense');
+    }
+    console.log('toolHandler resolveToolName self-check ok');
+}
+
