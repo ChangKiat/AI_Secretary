@@ -21,6 +21,7 @@
     "dev": "tsx src/index.ts",
     "db:push": "drizzle-kit push",
     "migrate:sheets": "tsx scripts/migrate-sheets-to-db.ts",
+    "check:prompts": "tsx src/config/prompts/_check.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

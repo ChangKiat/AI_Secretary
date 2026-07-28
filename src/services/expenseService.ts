@@ -131,6 +131,42 @@ export function formatExpenseLogReply(
     return lines.join('\n');
 }
 
+export interface ExpenseBatchEntry {
+    date: string;
+    amount: number;
+    currency: string;
+    category: string;
+    description?: string;
+    expenseId: number;
+    paymentMethod?: string | null;
+    reimbursements?: { source: string; amount: number }[];
+}
+
+export function formatBulkExpenseLogReply(date: string, entries: ExpenseBatchEntry[]): string {
+    const lines = [
+        `✅ Logged ${entries.length} expenses`,
+        `📅 Date: ${date}`,
+        '',
+    ];
+    let total = 0;
+    const currency = entries[0]?.currency || 'MYR';
+    for (const e of entries) {
+        total += e.amount;
+        const cur = e.currency || 'MYR';
+        const cat = resolveCategory(e.category);
+        const desc = e.description ? ` — ${e.description}` : '';
+        let bullet = `• #${e.expenseId} ${cat} · ${cur} ${e.amount}${desc}`;
+        if (e.reimbursements?.length) {
+            const reimbursed = e.reimbursements.reduce((s, r) => s + r.amount, 0);
+            const net = e.amount - reimbursed;
+            bullet += ` · your share ${cur} ${net}`;
+        }
+        lines.push(bullet);
+    }
+    lines.push('', `💵 Total: ${currency} ${Math.round(total * 100) / 100}`);
+    return lines.join('\n');
+}
+
 export async function getSpendingSummary(
     category?: string,
     description?: string,
@@ -504,4 +540,37 @@ export async function logBulkExpenses(expenseList: {
             paymentMethod: resolvePaymentMethod(exp.paymentMethod),
         }))
     );
+}
+
+// ponytail self-check: bulk expense reply format without DB
+if (require.main === module) {
+    const bulk = formatBulkExpenseLogReply('2026-07-25', [
+        {
+            date: '2026-07-25',
+            amount: 12.5,
+            currency: 'MYR',
+            category: 'Food',
+            description: 'Coffee',
+            expenseId: 88,
+        },
+        {
+            date: '2026-07-25',
+            amount: 57,
+            currency: 'MYR',
+            category: 'Food',
+            description: 'Dinner',
+            expenseId: 89,
+            reimbursements: [
+                { source: 'A', amount: 20 },
+                { source: 'B', amount: 20 },
+            ],
+        },
+    ]);
+    if (!bulk.includes('Logged 2 expenses') || !bulk.includes('#88 Other · MYR 12.5 — Coffee')) {
+        throw new Error(`bulk expense format failed:\n${bulk}`);
+    }
+    if (!bulk.includes('your share MYR 17') || !bulk.includes('Total: MYR 69.5')) {
+        throw new Error(`bulk expense totals/shared failed:\n${bulk}`);
+    }
+    console.log('expenseService self-check ok');
 }

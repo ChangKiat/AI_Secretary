@@ -1,4 +1,4 @@
-import { pgTable, serial, text, numeric, integer, boolean, timestamp, bigint } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, numeric, integer, boolean, timestamp, bigint, jsonb } from 'drizzle-orm/pg-core';
 
 export const expenses = pgTable('expenses', {
     id: serial('id').primaryKey(),
@@ -22,6 +22,9 @@ export const incomes = pgTable('incomes', {
     expenseId: integer('expense_id').references(() => expenses.id),
     paymentMethod: text('payment_method'),
     fromPaymentMethod: text('from_payment_method'),
+    rebateAccountId: integer('rebate_account_id').references(() => paymentAccounts.id),
+    rebatePeriodMonth: text('rebate_period_month'),
+    rebateCategory: text('rebate_category'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -54,6 +57,8 @@ export const paymentAccounts = pgTable('payment_accounts', {
     initialBalance: numeric('initial_balance', { precision: 12, scale: 2 }).default('0').notNull(),
     balanceBaselineDate: text('balance_baseline_date').notNull(),
     creditLimit: numeric('credit_limit', { precision: 12, scale: 2 }),
+    statementDay: integer('statement_day'),
+    rebateConfig: jsonb('rebate_config'),
     active: boolean('active').default(true).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });

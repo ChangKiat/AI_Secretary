@@ -1,5 +1,6 @@
 import { FunctionDeclaration, SchemaType } from '@google/generative-ai';
 import { getExpenseCategoryDescription } from '../config/expenseCategories';
+import type { SpecialistDomain } from '../config/prompts';
 import {
     getExpensePaymentMethodDescription,
     getPaymentMethodDescription,
@@ -329,26 +330,12 @@ export const checkScheduleDeclaration: FunctionDeclaration = {
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
-            expenses: {
-                type: SchemaType.ARRAY,
-                description: 'A list of all the outgoing expenses found in the document.',
-                items: {
-                    type: SchemaType.OBJECT,
-                    properties: {
-                      amount: { type: SchemaType.NUMBER, description: 'The cost or amount spent.' },
-                        currency: { type: SchemaType.STRING, description: 'The currency code, e.g., MYR or USD.' },
-                        category: { type: SchemaType.STRING, description: 'Category of expense, e.g., Food, Transport.' },
-                        description: { type: SchemaType.STRING, description: 'Brief description of what was purchased.' },
-                        date: { 
-                            type: SchemaType.STRING, 
-                            description: "Format: YYYY-MM-DD. MUST be the exact date the transaction occurred. Look at the statement's billing period or statement date to determine the correct year. NEVER use the current system date." 
-                        },
-                    },
-                    required: ['amount', 'currency', 'category', 'description'],
-                }
-            }
+            date: {
+                type: SchemaType.STRING,
+                description: 'YYYY-MM-DD for the day to check. Use today from SYSTEM CONTEXT when not specified.',
+            },
         },
-        required: ['expenses'],
+        required: ['date'],
     },
 };
 
@@ -611,35 +598,94 @@ export const getBudgetsDeclaration: FunctionDeclaration = {
     parameters: { type: SchemaType.OBJECT, properties: {} },
 };
 
+export const routeRequestDeclaration: FunctionDeclaration = {
+    name: 'route_request',
+    description:
+        'Route the user message to the correct domain specialist(s). Call immediately with all applicable domains.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            domains: {
+                type: SchemaType.ARRAY,
+                description:
+                    'One or more domains: expense, meal, calendar, workout, or chat (no tools).',
+                items: {
+                    type: SchemaType.STRING,
+                    description: 'expense | meal | calendar | workout | chat',
+                },
+            },
+            reasoning: {
+                type: SchemaType.STRING,
+                description: 'Brief reason for routing choice.',
+            },
+        },
+        required: ['domains'],
+    },
+};
+
+const EXPENSE_DECLARATIONS: FunctionDeclaration[] = [
+    buildLogExpenseDeclaration(),
+    buildLogIncomeDeclaration(),
+    buildEditExpenseDeclaration(),
+    deleteExpenseDeclaration,
+    buildEditIncomeDeclaration(),
+    deleteIncomeDeclaration,
+    buildGetSummaryDeclaration(),
+    buildAddFixedExpenseDeclaration(),
+    updateFixedExpenseDeclaration,
+    getAllFixedExpensesDeclaration,
+    deleteFixedExpenseDeclaration,
+    upsertBudgetDeclaration,
+    getBudgetsDeclaration,
+    buildLogBulkExpensesDeclaration(),
+];
+
+const MEAL_DECLARATIONS: FunctionDeclaration[] = [
+    logMealDeclaration,
+    getNutritionSummaryDeclaration,
+    suggestMealDeclaration,
+    getMealHistoryDeclaration,
+    editMealDeclaration,
+    deleteMealDeclaration,
+    updateUserSettingsDeclaration,
+];
+
+const CALENDAR_DECLARATIONS: FunctionDeclaration[] = [
+    createCalendarEventDeclaration,
+    checkScheduleDeclaration,
+];
+
+const WORKOUT_DECLARATIONS: FunctionDeclaration[] = [
+    logWorkoutDeclaration,
+    logBulkWorkoutsDeclaration,
+    getWorkoutHistoryDeclaration,
+    suggestWorkoutDeclaration,
+    getWorkoutSummaryDeclaration,
+    updateUserSettingsDeclaration,
+];
+
+export function getPlannerDeclarations(): FunctionDeclaration[] {
+    return [routeRequestDeclaration];
+}
+
+export function getDomainDeclarations(domain: SpecialistDomain): FunctionDeclaration[] {
+    switch (domain) {
+        case 'expense':
+            return EXPENSE_DECLARATIONS;
+        case 'meal':
+            return MEAL_DECLARATIONS;
+        case 'calendar':
+            return CALENDAR_DECLARATIONS;
+        case 'workout':
+            return WORKOUT_DECLARATIONS;
+    }
+}
+
 export function getAllFunctionDeclarations(): FunctionDeclaration[] {
     return [
-        buildLogExpenseDeclaration(),
-        buildLogIncomeDeclaration(),
-        buildEditExpenseDeclaration(),
-        deleteExpenseDeclaration,
-        buildEditIncomeDeclaration(),
-        deleteIncomeDeclaration,
-        buildGetSummaryDeclaration(),
-        buildAddFixedExpenseDeclaration(),
-        updateFixedExpenseDeclaration,
-        getAllFixedExpensesDeclaration,
-        deleteFixedExpenseDeclaration,
-        upsertBudgetDeclaration,
-        getBudgetsDeclaration,
-        createCalendarEventDeclaration,
-        checkScheduleDeclaration,
-        buildLogBulkExpensesDeclaration(),
-        logWorkoutDeclaration,
-        logBulkWorkoutsDeclaration,
-        getWorkoutHistoryDeclaration,
-        suggestWorkoutDeclaration,
-        logMealDeclaration,
-        getMealHistoryDeclaration,
-        editMealDeclaration,
-        deleteMealDeclaration,
-        getNutritionSummaryDeclaration,
-        suggestMealDeclaration,
-        updateUserSettingsDeclaration,
-        getWorkoutSummaryDeclaration,
+        ...EXPENSE_DECLARATIONS,
+        ...CALENDAR_DECLARATIONS,
+        ...WORKOUT_DECLARATIONS,
+        ...MEAL_DECLARATIONS.filter((d) => d.name !== 'update_user_settings'),
     ];
 }

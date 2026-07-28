@@ -344,6 +344,42 @@ export function formatMealLogReply(
     return lines.join('\n');
 }
 
+export interface MealBatchEntry {
+    meal: MealLogInput;
+    date: string;
+    mealId: number;
+}
+
+export function formatBulkMealLogReply(
+    date: string,
+    entries: MealBatchEntry[],
+    todayProgress: ReturnType<typeof buildDayProgress>
+): string {
+    const t = todayProgress;
+    const lines = [
+        `✅ Logged ${entries.length} meals`,
+        `📅 Date: ${date}`,
+        '',
+    ];
+    for (const { meal, mealId } of entries) {
+        const p = Math.round(meal.proteinG);
+        const c = Math.round(meal.carbsG);
+        const f = Math.round(meal.fatG);
+        const cal = Math.round(meal.calories);
+        const typeBit = meal.mealType ? `${meal.mealType} — ` : '';
+        lines.push(`• #${mealId} ${typeBit}${meal.description} · ${cal} cal · P${p}/C${c}/F${f}`);
+    }
+    lines.push(
+        '',
+        `📈 Today: ${t.calories.consumed}/${t.calories.target} cal · ` +
+            `Protein ${t.protein.consumed}/${t.protein.target}g · ` +
+            `Carbs ${t.carbs.consumed}/${t.carbs.target}g · ` +
+            `Fat ${t.fat.consumed}/${t.fat.target}g`,
+        '(approximate estimates)'
+    );
+    return lines.join('\n');
+}
+
 export async function getMealById(id: number, telegramUserId: number) {
     const db = requireDb();
     const rows = await db
@@ -458,4 +494,55 @@ export async function getTodayProteinRemaining(telegramUserId: number, date: str
         progress,
         targets,
     };
+}
+
+// ponytail self-check: bulk meal reply format without DB
+if (require.main === module) {
+    const progress = buildDayProgress(
+        { protein: 40, carbs: 60, fat: 20, calories: 600, meals: [] },
+        {
+            dailyProteinTargetG: 150,
+            dailyCalorieTarget: 2200,
+            dailyCarbsTargetG: 250,
+            dailyFatTargetG: 70,
+            timezone: 'Asia/Kuala_Lumpur',
+            bodyWeightKg: null,
+        }
+    );
+    const bulk = formatBulkMealLogReply(
+        '2026-07-25',
+        [
+            {
+                mealId: 12,
+                date: '2026-07-25',
+                meal: {
+                    description: 'Nasi lemak',
+                    mealType: 'Lunch',
+                    proteinG: 20,
+                    carbsG: 50,
+                    fatG: 15,
+                    calories: 450,
+                },
+            },
+            {
+                mealId: 13,
+                date: '2026-07-25',
+                meal: {
+                    description: 'Teh tarik',
+                    proteinG: 5,
+                    carbsG: 20,
+                    fatG: 5,
+                    calories: 150,
+                },
+            },
+        ],
+        progress
+    );
+    if (!bulk.includes('Logged 2 meals') || !bulk.includes('#12 Lunch — Nasi lemak')) {
+        throw new Error(`bulk meal format failed:\n${bulk}`);
+    }
+    if (!bulk.includes('Today: 600/2200 cal')) {
+        throw new Error(`bulk meal missing today progress:\n${bulk}`);
+    }
+    console.log('nutritionService self-check ok');
 }

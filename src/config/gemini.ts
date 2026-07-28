@@ -1,25 +1,54 @@
 import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
-import { buildSystemInstruction } from './config';
+import { buildPlannerInstruction, buildDomainInstruction, SpecialistDomain } from './prompts';
 import { getExpenseCategoryNames } from './expenseCategories';
-import { getAllFunctionDeclarations } from '../tools/tools';
+import { getDomainDeclarations, getPlannerDeclarations } from '../tools/tools';
 
 export const GEMINI_MODEL_DEFAULT =
     process.env.GEMINI_MODEL_DEFAULT || 'gemini-2.5-flash-lite';
 export const GEMINI_MODEL_HEAVY =
     process.env.GEMINI_MODEL_HEAVY || 'gemini-2.5-flash';
 
+const generationConfig = {
+    maxOutputTokens: 2048,
+    temperature: 0.1,
+};
+
+export function createPlannerModel(genAI: GoogleGenerativeAI): GenerativeModel {
+    return genAI.getGenerativeModel({
+        model: GEMINI_MODEL_DEFAULT,
+        generationConfig,
+        tools: [{ functionDeclarations: getPlannerDeclarations() }],
+        systemInstruction: buildPlannerInstruction(),
+    });
+}
+
+export function createDomainModel(
+    genAI: GoogleGenerativeAI,
+    domain: SpecialistDomain,
+    options?: { heavy?: boolean }
+): GenerativeModel {
+    const categoryNames = getExpenseCategoryNames();
+    const modelName =
+        options?.heavy && domain === 'expense' ? GEMINI_MODEL_HEAVY : GEMINI_MODEL_DEFAULT;
+    return genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig,
+        tools: [{ functionDeclarations: getDomainDeclarations(domain) }],
+        systemInstruction: buildDomainInstruction(domain, categoryNames),
+    });
+}
+
+/** @deprecated Use createPlannerModel or createDomainModel */
 export function createGeminiModel(
     genAI: GoogleGenerativeAI,
     modelName: string
 ): GenerativeModel {
     const categoryNames = getExpenseCategoryNames();
+    const domain: SpecialistDomain = 'expense';
     return genAI.getGenerativeModel({
         model: modelName,
-        generationConfig: {
-            maxOutputTokens: 2048,
-            temperature: 0.1,
-        },
-        tools: [{ functionDeclarations: getAllFunctionDeclarations() }],
-        systemInstruction: buildSystemInstruction(categoryNames),
+        generationConfig,
+        tools: [{ functionDeclarations: getDomainDeclarations(domain) }],
+        systemInstruction: buildDomainInstruction(domain, categoryNames),
     });
 }

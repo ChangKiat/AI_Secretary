@@ -15,6 +15,7 @@ import {
     updateExpense,
     deleteExpense,
     getExpenseById,
+    ExpenseBatchEntry,
 } from '../services/expenseService';
 import {
     appendIncome,
@@ -54,6 +55,7 @@ import {
     deleteMeal,
     getMealById,
     getNutritionTargets,
+    MealBatchEntry,
 } from '../services/nutritionService';
 
 export type ToolCallResult = 'complete' | 'awaiting_input';
@@ -67,6 +69,10 @@ export interface ToolCallOptions {
     suppressWorkoutReply?: boolean;
     workoutBatchCollector?: WorkoutLogEntry[];
     workoutBatchSessionId?: string;
+    suppressMealReply?: boolean;
+    mealBatchCollector?: MealBatchEntry[];
+    suppressExpenseReply?: boolean;
+    expenseBatchCollector?: ExpenseBatchEntry[];
     replyToExpenseId?: number;
     replyTarget?: ReplyRecordTarget;
 }
@@ -279,6 +285,19 @@ export async function handleToolCall(
         await chat.sendMessage([
             { functionResponse: { name: 'log_expense', response: { status: 'success' } } },
         ]);
+        if (options?.suppressExpenseReply) {
+            options.expenseBatchCollector?.push({
+                date: resolvedDate,
+                amount,
+                currency: resolvedCurrency,
+                category: resolvedCategory,
+                description,
+                expenseId,
+                paymentMethod: resolvedPaymentMethod,
+                reimbursements,
+            });
+            return 'complete';
+        }
         if (reimbursements?.length) {
             await ctx.reply(
                 formatSharedExpenseReply(
@@ -937,6 +956,10 @@ export async function handleToolCall(
                 },
             },
         ]);
+        if (options?.suppressMealReply) {
+            options.mealBatchCollector?.push({ meal, date, mealId });
+            return 'complete';
+        }
         await ctx.reply(formatMealLogReply(meal, date, progress, mealId));
         return 'complete';
     } else if (call.name === 'get_meal_history') {

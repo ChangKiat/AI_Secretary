@@ -3,7 +3,7 @@ import { resolvePaymentMethod } from '../config/paymentMethods';
 import { requireDb } from '../db/client';
 import { expenses, incomes } from '../db/schema';
 
-const INCOME_CATEGORIES = ['Claim', 'Transfer', 'Salary', 'Account transfer', 'Other'] as const;
+const INCOME_CATEGORIES = ['Claim', 'Transfer', 'Salary', 'Account transfer', 'Cashback', 'Other'] as const;
 export type IncomeCategory = (typeof INCOME_CATEGORIES)[number];
 
 function todayInKL(): string {
@@ -341,6 +341,80 @@ export async function deleteIncome(id: number): Promise<boolean> {
     const db = requireDb();
     const result = await db.delete(incomes).where(eq(incomes.id, id));
     return (result.count ?? 0) > 0;
+}
+
+function formatRebatePeriodLabel(periodMonth: string): string {
+    const [yearStr, monthStr] = periodMonth.split('-');
+    const date = new Date(parseInt(yearStr, 10), parseInt(monthStr, 10) - 1, 1);
+    return date.toLocaleDateString('en-MY', { month: 'short', year: 'numeric' });
+}
+
+export async function upsertRebateIncomes(
+    accountId: number,
+    accountName: string,
+    periodMonth: string,
+    periodEndDate: string,
+    categories: { category: string; earned: number }[]
+): Promise<void> {
+    const db = requireDb();
+    const existing = await db
+        .select()
+        .from(incomes)
+        .where(
+            and(
+                eq(incomes.rebateAccountId, accountId),
+                eq(incomes.rebatePeriodMonth, periodMonth)
+            )
+        );
+
+    const earnedByCategory = new Map(categories.map((c) => [c.category, c.earned]));
+    const allCategories = new Set<string>([
+        ...categories.map((c) => c.category),
+        ...existing
+            .map((row) => row.rebateCategory)
+            .filter((c): c is string => typeof c === 'string' && c.length > 0),
+    ]);
+
+    const periodLabel = formatRebatePeriodLabel(periodMonth);
+
+    for (const category of allCategories) {
+        const earned = earnedByCategory.get(category) ?? 0;
+        const match = existing.find((row) => row.rebateCategory === category);
+        const rounded = Math.round(earned * 100) / 100;
+
+        if (rounded <= 0) {
+            if (match) await db.delete(incomes).where(eq(incomes.id, match.id));
+            continue;
+        }
+
+        const description = `${category} cashback · ${periodLabel}`;
+        const paymentMethod = resolvePaymentMethod(accountName) ?? accountName;
+
+        if (match) {
+            await db
+                .update(incomes)
+                .set({
+                    amount: String(rounded),
+                    date: periodEndDate,
+                    description,
+                    paymentMethod,
+                    category: 'Cashback',
+                })
+                .where(eq(incomes.id, match.id));
+        } else {
+            await db.insert(incomes).values({
+                date: periodEndDate,
+                amount: String(rounded),
+                currency: 'MYR',
+                category: 'Cashback',
+                description,
+                paymentMethod,
+                rebateAccountId: accountId,
+                rebatePeriodMonth: periodMonth,
+                rebateCategory: category,
+            });
+        }
+    }
 }
 
 export async function deleteIncomesByExpenseId(expenseId: number): Promise<number> {
