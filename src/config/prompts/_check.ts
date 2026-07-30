@@ -39,4 +39,26 @@ for (let i = 0; i < DOMAINS.length; i++) {
     }
 }
 
+assert(
+    planner.includes('Restaurant') && planner.includes('expense AND meal'),
+    'planner must route restaurant receipts to expense AND meal'
+);
+assert(
+    planner.includes('statement') && planner.toLowerCase().includes('expense only'),
+    'planner must keep bank statements expense-only'
+);
+
+const expensePrompt = buildDomainInstruction('expense', getExpenseCategoryNames());
+assert(
+    expensePrompt.includes('grand total') || expensePrompt.includes('RESTAURANT RECEIPT'),
+    'expense prompt must log restaurant grand total only'
+);
+
+const mealDomainPrompt = buildDomainInstruction('meal', getExpenseCategoryNames());
+assert(
+    mealDomainPrompt.includes('RESTAURANT RECEIPT') &&
+        mealDomainPrompt.includes('Which items are yours?'),
+    'meal prompt must support receipt item selection'
+);
+
 console.log('prompts/_check: ok');

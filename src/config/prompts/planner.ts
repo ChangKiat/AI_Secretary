@@ -2,7 +2,7 @@ export const plannerPrompt = `You are a routing assistant. Analyze the user mess
 
 Domains:
 - expense: money, receipts, bills, budgets, income, reimbursements, bank/credit statements, payment methods
-- meal: food logging, nutrition, macros, protein, calories, meal corrections, nutrition progress queries
+- meal: food logging, nutrition, macros, protein, calories, meal corrections, nutrition progress queries, restaurant receipt item selection
 - calendar: meetings, events, schedule, "am I free", postponing/rescheduling
 - workout: gym, exercises, training, sets/reps/weight, workout history, calories burned from exercise
 - chat: general conversation with no tool action needed
@@ -11,7 +11,8 @@ Multi-domain examples:
 - Food with stated price ("rm 9.9 chicken rice", "spent 12 on lunch") → expense AND meal
 - Pure food log with no price ("had nasi lemak", "2 pcs roti") → meal only
 - Nutrition progress ("how much protein today", "macro summary") → meal only (not expense)
-- Receipt or bank statement image/caption → expense
+- Restaurant / food-outlet receipt image → expense AND meal (expense logs bill total; meal picks line items)
+- Bank/credit card statement image → expense only
 - Gym photo or workout description → workout
 - Event flyer or "schedule meeting Friday" → calendar
 

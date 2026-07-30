@@ -29,7 +29,6 @@ import {
     getOrCreateSession,
     getOrCreateDomainChat,
     filterSpecialistDomains,
-    updateSessionState,
     UserChatState,
     SpecialistDomain,
 } from './routing/router';
@@ -231,10 +230,8 @@ async function runChatTurn(
     ctx: import('telegraf').Context,
     prompt: string | (string | Record<string, unknown>)[],
     userId: number,
-    toolOptions?: import('./tools/toolHandler').ToolCallOptions,
-    trackSession = false,
-    activeDomain?: SpecialistDomain
-) {
+    toolOptions?: import('./tools/toolHandler').ToolCallOptions
+): Promise<'complete' | 'awaiting_input'> {
     const result = await chat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
     const response = result.response;
     const functionCalls = response.functionCalls();
@@ -244,7 +241,7 @@ async function runChatTurn(
     );
 
     if (functionCalls && functionCalls.length > 0) {
-        let shouldClearSession = true;
+        let awaiting = false;
         const workoutCallCount = functionCalls.filter((c) => c.name === 'log_workout').length;
         const mealCallCount = functionCalls.filter((c) => c.name === 'log_meal').length;
         const expenseCallCount = functionCalls.filter((c) => c.name === 'log_expense').length;
@@ -273,7 +270,7 @@ async function runChatTurn(
             }
             const toolResult = await handleToolCall(call, chat, ctx, callOptions);
             if (toolResult === 'awaiting_input') {
-                shouldClearSession = false;
+                awaiting = true;
             }
         }
 
@@ -293,30 +290,17 @@ async function runChatTurn(
             );
         }
 
-        if (trackSession) {
-            if (shouldClearSession) {
-                userSessions.delete(userId);
-            } else {
-                updateSessionState(userSessions, userId, {
-                    awaitingInput: true,
-                    activeDomain,
-                });
-            }
-        }
-    } else {
-        const aiText = response.text();
-        if (aiText && aiText.trim().length > 0) {
-            await ctx.reply(aiText);
-        } else {
-            await ctx.reply("I processed that, but I couldn't find anything to log or report.");
-        }
-        if (trackSession) {
-            updateSessionState(userSessions, userId, {
-                awaitingInput: true,
-                activeDomain,
-            });
-        }
+        return awaiting ? 'awaiting_input' : 'complete';
     }
+
+    const aiText = response.text();
+    if (aiText && aiText.trim().length > 0) {
+        await ctx.reply(aiText);
+    } else {
+        await ctx.reply("I processed that, but I couldn't find anything to log or report.");
+    }
+    // Text-only reply (e.g. numbered receipt items) needs a follow-up from the user.
+    return 'awaiting_input';
 }
 
 async function runDomainTurn(
@@ -327,13 +311,13 @@ async function runDomainTurn(
     session: UserChatState,
     toolOptions: import('./tools/toolHandler').ToolCallOptions,
     heavy = false
-) {
+): Promise<'complete' | 'awaiting_input'> {
     const chat = getOrCreateDomainChat(session, domain, {
         ...routeOptionsBase(),
         userId,
         heavy,
     });
-    await runChatTurn(chat, ctx, parts, userId, toolOptions, true, domain);
+    return runChatTurn(chat, ctx, parts, userId, toolOptions);
 }
 
 async function handleChatOnly(ctx: import('telegraf').Context, contextPrompt: string) {
@@ -394,12 +378,15 @@ async function routeAndExecute(
         return;
     }
 
+    let anyAwaiting = false;
+    let awaitDomain: SpecialistDomain | undefined;
+
     for (const domain of specialists) {
         const specialistParts =
             mediaParts.length > 0 ? [...mediaParts, contextPrompt] : contextPrompt;
         const heavy = options?.heavy && domain === 'expense';
         try {
-            await runDomainTurn(
+            const status = await runDomainTurn(
                 domain,
                 ctx,
                 specialistParts,
@@ -408,10 +395,14 @@ async function routeAndExecute(
                 mergedToolOptions,
                 heavy
             );
+            if (status === 'awaiting_input') {
+                anyAwaiting = true;
+                awaitDomain = domain;
+            }
         } catch (error) {
             if (heavy && isGeminiOverloadError(error)) {
                 delete session.chats[domain];
-                await runDomainTurn(
+                const status = await runDomainTurn(
                     domain,
                     ctx,
                     specialistParts,
@@ -420,10 +411,23 @@ async function routeAndExecute(
                     mergedToolOptions,
                     false
                 );
+                if (status === 'awaiting_input') {
+                    anyAwaiting = true;
+                    awaitDomain = domain;
+                }
             } else {
                 throw error;
             }
         }
+    }
+
+    if (anyAwaiting && awaitDomain) {
+        userSessions.set(userId, session);
+        session.awaitingInput = true;
+        session.activeDomain = awaitDomain;
+        session.lastActiveAt = Date.now();
+    } else {
+        userSessions.delete(userId);
     }
 }
 

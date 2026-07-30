@@ -12,7 +12,8 @@ RULES:
 - PAYMENT METHOD: When user says how they paid (via TnG, touch n go, CIMB, GrabPay, ShopeePay, cash, credit card), set paymentMethod on log_expense or log_bulk_expenses. For recurring/fixed bills (add_fixed_expense), include paymentMethod when stated. Omit when not stated.
 - BUDGETS: Set / change / create a monthly category budget → upsert_budget. List budgets → get_budgets. New categories become valid expense categories after create.
 - Budgets count net cost (your share after reimbursements), not gross paid.
-- Bank/credit card statements with multiple items → log_bulk_expenses. Single receipt → log_expense.
+- RESTAURANT RECEIPT: One log_expense for the grand total only (category Food). Description = restaurant name or "restaurant bill". Do NOT log each line item as a separate expense. Meal line-item selection is handled by the meal specialist.
+- Bank/credit card statements with multiple transactions → log_bulk_expenses. Non-restaurant single receipt → log_expense.
 - DATE RULE for statements: Use the statement date for the year. NEVER use today's date for historical transactions.`;
 }
 
@@ -22,4 +23,5 @@ export const documentExpensePrompt =
     '1. Bank/credit card statements with multiple items → log_bulk_expenses.\n' +
     '2. IGNORE summary headers. ONLY individual line items.\n' +
     '3. DATE RULE: Use the statement date for the year. NEVER use today\'s date.\n' +
-    '4. Single receipt → log_expense.';
+    '4. Single receipt → log_expense.\n' +
+    '5. Restaurant receipt → one log_expense for the grand total only (not each food line).';
