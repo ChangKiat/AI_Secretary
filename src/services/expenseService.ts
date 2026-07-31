@@ -271,7 +271,10 @@ export async function addFixedExpense(
 ) {
     const db = requireDb();
     const resolvedCategory = resolveCategory(category);
-    const isInvestment = resolvedCategory.toLowerCase() === 'investment';
+    const keepDestination = (() => {
+        const c = resolvedCategory.toLowerCase();
+        return c === 'investment' || c === 'other';
+    })();
     await db.insert(fixedExpenses).values({
         dayOfMonth,
         amount: String(amount),
@@ -282,7 +285,7 @@ export async function addFixedExpense(
         startMonth,
         active: true,
         paymentMethod: resolvePaymentMethod(paymentMethod),
-        toInvestmentAccount: isInvestment
+        toInvestmentAccount: keepDestination
             ? resolvePaymentMethod(toInvestmentAccount)
             : null,
     });
@@ -497,8 +500,11 @@ export async function updateFixedExpenseById(
         set.toInvestmentAccount = resolvePaymentMethod(fields.toInvestmentAccount);
     }
 
-    if (fields.category != null && resolveCategory(fields.category).toLowerCase() !== 'investment') {
-        set.toInvestmentAccount = null;
+    if (fields.category != null) {
+        const c = resolveCategory(fields.category).toLowerCase();
+        if (c !== 'investment' && c !== 'other') {
+            set.toInvestmentAccount = null;
+        }
     }
 
     if (Object.keys(set).length === 0) return false;
