@@ -304,19 +304,22 @@ export const deleteIncomeDeclaration: FunctionDeclaration = {
 
 export const createCalendarEventDeclaration: FunctionDeclaration = {
     name: 'create_calendar_event',
-    description: 'Use this tool WHENEVER the user mentions scheduling, booking, or POSTPONING a meeting. Triggers on conversational updates like "I postponed the meeting to...". Only call when you have a specific startDateTime. If time is missing, ask the user first.',
+    description:
+        'Creates a NEW calendar event when the user schedules or books something. Do NOT use for postponing, moving, or cancelling—use reschedule_calendar_event or cancel_calendar_event. Only call when you have a specific startDateTime. If time is missing, ask the user first.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
             title: { type: SchemaType.STRING, description: 'Short title of the event.' },
-            startDateTime: { 
-    type: SchemaType.STRING, 
-    description: 'Start time in ISO 8601. If it is an all-day event or date range, set the time to 00:00:00 (e.g., 2026-04-24T00:00:00+08:00).' 
-},
-endDateTime: { 
-    type: SchemaType.STRING, 
-    description: 'End time. For a multi-day event like "24-26", this should be the end date at 23:59:59 (e.g., 2026-04-26T23:59:59+08:00).' 
-},
+            startDateTime: {
+                type: SchemaType.STRING,
+                description:
+                    'Start time in ISO 8601. If it is an all-day event or date range, set the time to 00:00:00 (e.g., 2026-04-24T00:00:00+08:00).',
+            },
+            endDateTime: {
+                type: SchemaType.STRING,
+                description:
+                    'End time. For a multi-day event like "24-26", this should be the end date at 23:59:59 (e.g., 2026-04-26T23:59:59+08:00).',
+            },
             description: { type: SchemaType.STRING, description: 'Extra details.' },
         },
         required: ['title', 'startDateTime'],
@@ -326,7 +329,7 @@ endDateTime: {
 export const checkScheduleDeclaration: FunctionDeclaration = {
     name: 'check_schedule',
     description:
-        "Retrieves the user's schedule for a specific day. Use this when the user asks \"Am I free?\", \"What do I have planned?\", or \"Check my schedule\".",
+        "Retrieves the user's schedule for a specific day (includes event ids). Use when the user asks \"Am I free?\", \"What do I have planned?\", or \"Check my schedule\".",
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -336,6 +339,60 @@ export const checkScheduleDeclaration: FunctionDeclaration = {
             },
         },
         required: ['date'],
+    },
+};
+
+export const rescheduleCalendarEventDeclaration: FunctionDeclaration = {
+    name: 'reschedule_calendar_event',
+    description:
+        'Moves/postpones an existing calendar event to a new time. Match by title keyword (and optional date). Use for "postpone", "reschedule", "move meeting to…". Do NOT create a new event.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            title: {
+                type: SchemaType.STRING,
+                description: 'Keyword or name of the existing event to find (substring match).',
+            },
+            newStartDateTime: {
+                type: SchemaType.STRING,
+                description: 'New start time in ISO 8601 with timezone offset.',
+            },
+            date: {
+                type: SchemaType.STRING,
+                description:
+                    'YYYY-MM-DD of the day where the existing event currently is. Defaults to today if omitted.',
+            },
+            newEndDateTime: {
+                type: SchemaType.STRING,
+                description: 'Optional new end time. If omitted, duration of the original event is kept.',
+            },
+            newTitle: {
+                type: SchemaType.STRING,
+                description: 'Optional new title when renaming while rescheduling.',
+            },
+        },
+        required: ['title', 'newStartDateTime'],
+    },
+};
+
+export const cancelCalendarEventDeclaration: FunctionDeclaration = {
+    name: 'cancel_calendar_event',
+    description:
+        'Cancels/deletes an existing calendar event. Match by title keyword (and optional date). Use for "cancel", "delete", "remove from calendar".',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            title: {
+                type: SchemaType.STRING,
+                description: 'Keyword or name of the existing event to find (substring match).',
+            },
+            date: {
+                type: SchemaType.STRING,
+                description:
+                    'YYYY-MM-DD of the day where the event is. Defaults to today if omitted.',
+            },
+        },
+        required: ['title'],
     },
 };
 
@@ -653,6 +710,8 @@ const MEAL_DECLARATIONS: FunctionDeclaration[] = [
 const CALENDAR_DECLARATIONS: FunctionDeclaration[] = [
     createCalendarEventDeclaration,
     checkScheduleDeclaration,
+    rescheduleCalendarEventDeclaration,
+    cancelCalendarEventDeclaration,
 ];
 
 const WORKOUT_DECLARATIONS: FunctionDeclaration[] = [

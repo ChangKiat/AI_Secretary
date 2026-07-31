@@ -28,7 +28,14 @@ import {
     getIncomeById,
     ReplyRecordTarget,
 } from '../services/incomeService';
-import { createCalendarEvent, getSchedule } from '../services/calendarService';
+import {
+    createCalendarEvent,
+    getSchedule,
+    findCalendarEvents,
+    rescheduleCalendarEvent,
+    cancelCalendarEvent,
+    CalendarEventSummary,
+} from '../services/calendarService';
 import {
     logWorkout,
     logBulkWorkouts,
@@ -208,6 +215,8 @@ const KNOWN_TOOL_NAMES = new Set([
     'delete_fixed_expense',
     'create_calendar_event',
     'check_schedule',
+    'reschedule_calendar_event',
+    'cancel_calendar_event',
     'log_bulk_expenses',
     'log_workout',
     'log_bulk_workouts',
@@ -729,6 +738,110 @@ export async function handleToolCall(
         ]);
         await ctx.reply(nextResult.response.text());
         return 'complete';
+    } else if (call.name === 'reschedule_calendar_event') {
+        const args = call.args as {
+            title: string;
+            newStartDateTime: string;
+            date?: string;
+            newEndDateTime?: string;
+            newTitle?: string;
+        };
+        try {
+            const matches = await findCalendarEvents({ title: args.title, date: args.date });
+            if (matches.length !== 1) {
+                await chat.sendMessage([
+                    {
+                        functionResponse: {
+                            name: 'reschedule_calendar_event',
+                            response: {
+                                status: matches.length === 0 ? 'not_found' : 'ambiguous',
+                                candidates: matches,
+                                searchedTitle: args.title,
+                                searchedDate: args.date || 'today',
+                            },
+                        },
+                    },
+                ]);
+                const followUp = await chat.sendMessage(
+                    matches.length === 0
+                        ? 'No matching event found. Ask the user to clarify the event name or which day it is on.'
+                        : 'Multiple events matched. Ask the user which one to reschedule (list titles and times briefly).'
+                );
+                await ctx.reply(followUp.response.text());
+                return 'awaiting_input';
+            }
+            const updated = await rescheduleCalendarEvent(
+                matches[0].id,
+                args.newStartDateTime,
+                args.newEndDateTime,
+                args.newTitle
+            );
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'reschedule_calendar_event',
+                        response: { status: 'success', event: updated },
+                    },
+                },
+            ]);
+            await ctx.reply(
+                `📅 **Rescheduled!**\n\n` +
+                    `"${updated.title}" → **${updated.start}**`,
+                { parse_mode: 'Markdown' }
+            );
+            return 'complete';
+        } catch (error) {
+            console.error('Tool Execution Error:', error);
+            await ctx.reply('I had a problem rescheduling that event. Please try again in a moment.');
+            return 'complete';
+        }
+    } else if (call.name === 'cancel_calendar_event') {
+        const args = call.args as { title: string; date?: string };
+        try {
+            const matches = await findCalendarEvents({ title: args.title, date: args.date });
+            if (matches.length !== 1) {
+                await chat.sendMessage([
+                    {
+                        functionResponse: {
+                            name: 'cancel_calendar_event',
+                            response: {
+                                status: matches.length === 0 ? 'not_found' : 'ambiguous',
+                                candidates: matches,
+                                searchedTitle: args.title,
+                                searchedDate: args.date || 'today',
+                            },
+                        },
+                    },
+                ]);
+                const followUp = await chat.sendMessage(
+                    matches.length === 0
+                        ? 'No matching event found. Ask the user to clarify the event name or which day it is on.'
+                        : 'Multiple events matched. Ask the user which one to cancel (list titles and times briefly).'
+                );
+                await ctx.reply(followUp.response.text());
+                return 'awaiting_input';
+            }
+            const cancelled: CalendarEventSummary = matches[0];
+            await cancelCalendarEvent(cancelled.id);
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'cancel_calendar_event',
+                        response: { status: 'success', event: cancelled },
+                    },
+                },
+            ]);
+            await ctx.reply(
+                `🗑️ **Cancelled!**\n\n` +
+                    `Removed "${cancelled.title}"${cancelled.start ? ` (${cancelled.start})` : ''} from your calendar.`,
+                { parse_mode: 'Markdown' }
+            );
+            return 'complete';
+        } catch (error) {
+            console.error('Tool Execution Error:', error);
+            await ctx.reply('I had a problem cancelling that event. Please try again in a moment.');
+            return 'complete';
+        }
     } else if (call.name === 'log_bulk_expenses') {
         const args = call.args as Record<string, unknown>;
         let expensesArray = (args.expenses ?? args.Expenses) as unknown;

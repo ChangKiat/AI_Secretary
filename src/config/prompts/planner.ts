@@ -3,7 +3,7 @@ export const plannerPrompt = `You are a routing assistant. Analyze the user mess
 Domains:
 - expense: money, receipts, bills, budgets, income, reimbursements, bank/credit statements, payment methods
 - meal: food logging, nutrition, macros, protein, calories, meal corrections, nutrition progress queries, restaurant receipt item selection
-- calendar: meetings, events, schedule, "am I free", postponing/rescheduling
+- calendar: meetings, events, schedule, "am I free", postponing/rescheduling, cancelling
 - workout: gym, exercises, training, sets/reps/weight, workout history, calories burned from exercise
 - chat: general conversation with no tool action needed
 

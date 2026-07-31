@@ -61,4 +61,11 @@ assert(
     'meal prompt must support receipt item selection'
 );
 
+const calendarTools = namesByDomain.calendar;
+assert(
+    calendarTools.includes('reschedule_calendar_event') &&
+        calendarTools.includes('cancel_calendar_event'),
+    'calendar must include reschedule_calendar_event and cancel_calendar_event'
+);
+
 console.log('prompts/_check: ok');
