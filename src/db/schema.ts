@@ -1,5 +1,15 @@
 import { pgTable, serial, text, numeric, integer, boolean, timestamp, bigint, jsonb } from 'drizzle-orm/pg-core';
 
+export const trips = pgTable('trips', {
+    id: serial('id').primaryKey(),
+    name: text('name').notNull(),
+    startDate: text('start_date'),
+    endDate: text('end_date'),
+    tripCurrency: text('trip_currency').default('USD').notNull(),
+    notes: text('notes'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 export const expenses = pgTable('expenses', {
     id: serial('id').primaryKey(),
     date: text('date').notNull(),
@@ -8,6 +18,11 @@ export const expenses = pgTable('expenses', {
     category: text('category').default('Other').notNull(),
     description: text('description').notNull(),
     paymentMethod: text('payment_method'),
+    tripId: integer('trip_id').references(() => trips.id),
+    tripLeg: text('trip_leg'),
+    fxAmount: numeric('fx_amount', { precision: 12, scale: 2 }),
+    fxCurrency: text('fx_currency'),
+    fxRate: numeric('fx_rate', { precision: 12, scale: 6 }),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

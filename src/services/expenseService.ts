@@ -86,13 +86,28 @@ function rowMatchesFilters(
     return true;
 }
 
+export type TripLeg = 'exchange' | 'fund' | 'card';
+
+export type ExpenseTripFields = {
+    tripId?: number | null;
+    tripLeg?: TripLeg | null;
+    fxAmount?: number | null;
+    fxCurrency?: string | null;
+    fxRate?: number | null;
+};
+
+export function isTripFundSpend(row: { tripLeg?: string | null }): boolean {
+    return row.tripLeg === 'fund';
+}
+
 export async function appendExpense(
     date: string | undefined,
     amount: number,
     currency: string,
     category: string,
     description: string,
-    paymentMethod?: string | null
+    paymentMethod?: string | null,
+    trip?: ExpenseTripFields
 ): Promise<number> {
     const db = requireDb();
     const [row] = await db
@@ -104,6 +119,11 @@ export async function appendExpense(
             category: resolveCategory(category),
             description,
             paymentMethod: resolvePaymentMethod(paymentMethod),
+            tripId: trip?.tripId ?? null,
+            tripLeg: trip?.tripLeg ?? null,
+            fxAmount: trip?.fxAmount != null ? String(trip.fxAmount) : null,
+            fxCurrency: trip?.fxCurrency ?? null,
+            fxRate: trip?.fxRate != null ? String(trip.fxRate) : null,
         })
         .returning({ id: expenses.id });
     return row.id;
@@ -193,6 +213,8 @@ export async function getSpendingSummary(
     const budgetSpent: Record<string, number> = {};
 
     for (const row of rows) {
+        if (isTripFundSpend(row)) continue;
+
         const canonicalCategory = resolveCategory(row.category);
         const gross = parseFloat(row.amount);
         const reimbursed = reimbursedByExpenseId.get(row.id) || 0;
@@ -407,10 +429,15 @@ export async function updateExpense(
         category?: string;
         description?: string;
         paymentMethod?: string | null;
+        tripId?: number | null;
+        tripLeg?: TripLeg | null;
+        fxAmount?: number | null;
+        fxCurrency?: string | null;
+        fxRate?: number | null;
     }
 ): Promise<boolean> {
     const db = requireDb();
-    const set: Record<string, string | null> = {};
+    const set: Record<string, string | number | null> = {};
 
     if (fields.date != null) set.date = fields.date;
     if (fields.amount != null) set.amount = String(fields.amount);
@@ -419,6 +446,15 @@ export async function updateExpense(
     if (fields.description != null) set.description = fields.description;
     if (fields.paymentMethod !== undefined) {
         set.paymentMethod = resolvePaymentMethod(fields.paymentMethod);
+    }
+    if (fields.tripId !== undefined) set.tripId = fields.tripId;
+    if (fields.tripLeg !== undefined) set.tripLeg = fields.tripLeg;
+    if (fields.fxAmount !== undefined) {
+        set.fxAmount = fields.fxAmount != null ? String(fields.fxAmount) : null;
+    }
+    if (fields.fxCurrency !== undefined) set.fxCurrency = fields.fxCurrency;
+    if (fields.fxRate !== undefined) {
+        set.fxRate = fields.fxRate != null ? String(fields.fxRate) : null;
     }
 
     if (Object.keys(set).length === 0) return false;
@@ -440,6 +476,11 @@ export async function getExpenseById(id: number) {
         category: resolveCategory(row.category),
         description: row.description,
         paymentMethod: row.paymentMethod ? resolvePaymentMethod(row.paymentMethod) : null,
+        tripId: row.tripId ?? null,
+        tripLeg: (row.tripLeg as TripLeg | null) ?? null,
+        fxAmount: row.fxAmount != null ? parseFloat(row.fxAmount) : null,
+        fxCurrency: row.fxCurrency ?? null,
+        fxRate: row.fxRate != null ? parseFloat(row.fxRate) : null,
     };
 }
 

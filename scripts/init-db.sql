@@ -1,3 +1,13 @@
+CREATE TABLE IF NOT EXISTS trips (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    start_date TEXT,
+    end_date TEXT,
+    trip_currency TEXT NOT NULL DEFAULT 'USD',
+    notes TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- Expenses table (clean)
 CREATE TABLE IF NOT EXISTS expenses (
     id SERIAL PRIMARY KEY,
@@ -7,6 +17,11 @@ CREATE TABLE IF NOT EXISTS expenses (
     category TEXT NOT NULL DEFAULT 'Other',
     description TEXT NOT NULL,
     payment_method TEXT,
+    trip_id INTEGER REFERENCES trips(id),
+    trip_leg TEXT,
+    fx_amount NUMERIC(12, 2),
+    fx_currency TEXT,
+    fx_rate NUMERIC(12, 6),
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -28,6 +43,7 @@ INSERT INTO budgets (category, monthly_budget) VALUES
     ('Investment', 1000),
     ('Insurance', 1000),
     ('Utility', 1000),
+    ('Travel', 1000),
     ('Other', 1000)
 ON CONFLICT (category) DO NOTHING;
 
