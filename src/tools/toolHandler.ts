@@ -48,7 +48,7 @@ import {
     normalizeWeightsKg,
     WorkoutLogEntry,
 } from '../services/gymService';
-import { estimateBurn } from '../services/burnCalculator';
+import { estimateBurn, burnFromReportedCalories } from '../services/burnCalculator';
 import {
     logMeal,
     getNutritionSummary,
@@ -140,6 +140,7 @@ interface WorkoutArgs {
     weightKg?: number;
     weightsKg?: number[];
     durationMin?: number;
+    caloriesBurned?: number;
     notes?: string;
     supersetGroup?: number;
 }
@@ -150,14 +151,17 @@ async function buildWorkoutEntry(
     bodyWeightKg: number | null
 ): Promise<WorkoutLogEntry> {
     const normalized = normalizeWeightsKg(args.weightsKg, args.weightKg, args.sets);
-    const burn = estimateBurn(
-        args.exercise,
-        args.durationMin,
-        normalized.sets,
-        args.reps,
-        normalized.topWeightKg,
-        bodyWeightKg
-    );
+    const burn =
+        args.caloriesBurned != null && args.caloriesBurned > 0
+            ? burnFromReportedCalories(args.caloriesBurned)
+            : estimateBurn(
+                  args.exercise,
+                  args.durationMin,
+                  normalized.sets,
+                  args.reps,
+                  normalized.topWeightKg,
+                  bodyWeightKg
+              );
 
     return {
         date,

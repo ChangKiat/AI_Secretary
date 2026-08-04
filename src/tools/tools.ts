@@ -415,6 +415,11 @@ export const logWorkoutDeclaration: FunctionDeclaration = {
                 items: { type: SchemaType.NUMBER },
             },
             durationMin: { type: SchemaType.NUMBER, description: 'Duration in minutes. Use decimals for sub-minute holds (e.g. 0.5 for 30 sec plank).' },
+            caloriesBurned: {
+                type: SchemaType.NUMBER,
+                description:
+                    'Optional. Machine/app-reported calories from a workout screen photo. Prefer over estimated burn when shown.',
+            },
             notes: { type: SchemaType.STRING, description: 'Optional notes.' },
         },
         required: ['exercise'],
@@ -461,6 +466,11 @@ export const logBulkWorkoutsDeclaration: FunctionDeclaration = {
                             items: { type: SchemaType.NUMBER },
                         },
                         durationMin: { type: SchemaType.NUMBER, description: 'Duration in minutes.' },
+                        caloriesBurned: {
+                            type: SchemaType.NUMBER,
+                            description:
+                                'Optional. Machine/app-reported calories from a workout screen. Prefer when shown on photo.',
+                        },
                         notes: { type: SchemaType.STRING, description: 'Optional notes.' },
                         supersetGroup: {
                             type: SchemaType.NUMBER,

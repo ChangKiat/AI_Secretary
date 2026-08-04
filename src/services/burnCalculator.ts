@@ -98,6 +98,12 @@ function fatGramsFromCalories(caloriesBurned: number): number {
     return Math.round(((caloriesBurned * FAT_OXIDATION_RATIO) / 9) * 10) / 10;
 }
 
+/** Prefer machine/app-reported calories over MET estimate. */
+export function burnFromReportedCalories(caloriesBurned: number): BurnEstimate {
+    const cal = Math.round(caloriesBurned);
+    return { caloriesBurned: cal, fatBurnG: fatGramsFromCalories(cal) };
+}
+
 export function estimateBurn(
     exercise: string,
     durationMin?: number,

@@ -30,6 +30,19 @@ function parseDomains(raw: unknown): RouteDomain[] {
     return domains.length > 0 ? domains : ['chat'];
 }
 
+const PRICE_SIGNAL =
+    /\brm\s*\d|\bmyr\s*\d|\d+\s*(?:rm|myr)\b|\$\s*\d/i;
+const PAYMENT_SIGNAL =
+    /\b(tng|touch\s*(?:n|and|&)\s*go|touchngo|grabpay|shopeepay|cimb|maybank|cash|credit\s*card)\b/i;
+
+/** If text has price/payment, drop chat and ensure expense is included. */
+export function applyMoneyRoutingHints(text: string, domains: RouteDomain[]): RouteDomain[] {
+    if (!PRICE_SIGNAL.test(text) && !PAYMENT_SIGNAL.test(text)) return domains;
+    const next = domains.filter((d) => d !== 'chat');
+    if (!next.includes('expense')) next.push('expense');
+    return next.length > 0 ? next : ['expense'];
+}
+
 export async function routeMessage(
     prompt: string | (string | Record<string, unknown>)[],
     options: RouteOptions

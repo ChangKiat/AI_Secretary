@@ -29,6 +29,7 @@ import {
     getOrCreateSession,
     getOrCreateDomainChat,
     filterSpecialistDomains,
+    applyMoneyRoutingHints,
     UserChatState,
     SpecialistDomain,
 } from './routing/router';
@@ -373,6 +374,11 @@ async function routeAndExecute(
         if (mediaParts.length > 0 && filterSpecialistDomains(domains).length === 0) {
             console.log('🧭 Media present but planner chose chat — forcing expense');
             domains = ['expense'];
+        }
+        const beforeMoney = domains.join(',');
+        domains = applyMoneyRoutingHints(textForContext, domains);
+        if (domains.join(',') !== beforeMoney) {
+            console.log('🧭 Money hint adjusted route:', domains.join(', '));
         }
     }
 

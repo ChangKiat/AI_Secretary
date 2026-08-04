@@ -48,6 +48,14 @@ assert(
     'planner must not chat-only on receipt images with payment captions'
 );
 assert(
+    planner.includes('chinese kopi') && planner.includes('never chat'),
+    'planner must route food+RM+TNG to expense AND meal, never chat'
+);
+assert(
+    planner.includes('payment method') && planner.includes('include expense'),
+    'planner must never chat alone on price/payment messages'
+);
+assert(
     planner.includes('statement') && planner.toLowerCase().includes('expense only'),
     'planner must keep bank statements expense-only'
 );
@@ -63,6 +71,21 @@ assert(
     mealDomainPrompt.includes('RESTAURANT RECEIPT') &&
         mealDomainPrompt.includes('Which items are yours?'),
     'meal prompt must support receipt item selection'
+);
+assert(
+    mealDomainPrompt.includes('MONEY') && mealDomainPrompt.includes('lack financial tools'),
+    'meal prompt must ignore price/payment and never discuss financial tools'
+);
+
+const workoutDomainPrompt = buildDomainInstruction('workout', getExpenseCategoryNames());
+assert(
+    workoutDomainPrompt.includes('MACHINE SCREEN') &&
+        workoutDomainPrompt.includes('caloriesBurned'),
+    'workout prompt must log machine screen calories with caption exercises'
+);
+assert(
+    planner.includes('machine results') || planner.includes('machine screen'),
+    'planner must route machine screen + caption to workout'
 );
 
 const calendarTools = namesByDomain.calendar;
