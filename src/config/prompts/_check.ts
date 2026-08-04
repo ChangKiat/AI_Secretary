@@ -44,6 +44,10 @@ assert(
     'planner must route restaurant receipts to expense AND meal'
 );
 assert(
+    planner.includes('payment caption') && planner.includes('never chat alone'),
+    'planner must not chat-only on receipt images with payment captions'
+);
+assert(
     planner.includes('statement') && planner.toLowerCase().includes('expense only'),
     'planner must keep bank statements expense-only'
 );

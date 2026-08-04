@@ -12,6 +12,7 @@ Multi-domain examples:
 - Pure food log with no price ("had nasi lemak", "2 pcs roti") → meal only
 - Nutrition progress ("how much protein today", "macro summary") → meal only (not expense)
 - Restaurant / food-outlet receipt image → expense AND meal (expense logs bill total; meal picks line items)
+- Receipt image with a payment caption (TnG, touch and go, GrabPay, cash, etc.) → still expense (+ meal if food outlet); never chat alone
 - Bank/credit card statement image → expense only
 - Gym photo or workout description → workout
 - Event flyer or "schedule meeting Friday" → calendar

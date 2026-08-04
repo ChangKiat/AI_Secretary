@@ -3,6 +3,16 @@ import {
     type PaymentAccount,
 } from '../services/paymentAccountService';
 
+/** Maps common nicknames → canonical account name (resolved via nameByLower when present). */
+const ALIAS_MAP: Record<string, string> = {
+    tng: 'TnG',
+    'touch n go': 'TnG',
+    'touch and go': 'TnG',
+    'touch & go': 'TnG',
+    'touch-n-go': 'TnG',
+    touchngo: 'TnG',
+};
+
 let cachedAccounts: PaymentAccount[] = [];
 let nameByLower = new Map<string, string>();
 let paymentMethodDescription = '';
@@ -25,6 +35,11 @@ function applyCache(accounts: PaymentAccount[]): PaymentAccount[] {
             ? `Optional. Use one of: ${namesForDescription(spendable)}. Omit if unknown. Do not use investment accounts for expenses.`
             : 'Optional. Configure payment accounts in the dashboard Income tab. Omit if unknown.';
     return cachedAccounts;
+}
+
+/** Seed cache for self-check (ponytail: no test framework). */
+export function setPaymentAccountsCache(accounts: PaymentAccount[]): void {
+    applyCache(accounts);
 }
 
 export async function loadPaymentAccounts(): Promise<PaymentAccount[]> {
@@ -52,8 +67,11 @@ export function resolvePaymentMethod(input?: string | null): string | null {
     const trimmed = input.trim();
     if (!trimmed) return null;
 
-    const lower = trimmed.toLowerCase();
+    const lower = trimmed.toLowerCase().replace(/\s+/g, ' ');
     if (nameByLower.has(lower)) return nameByLower.get(lower)!;
+
+    const alias = ALIAS_MAP[lower];
+    if (alias) return nameByLower.get(alias.toLowerCase()) ?? alias;
 
     return trimmed;
 }

@@ -361,7 +361,7 @@ async function routeAndExecute(
         domains = options.forceDomains;
     } else {
         const plannerParts =
-            mediaParts.length > 0 && !textForContext.trim()
+            mediaParts.length > 0
                 ? [...mediaParts, contextPrompt]
                 : contextPrompt;
         domains = await routeMessage(plannerParts, {
@@ -369,6 +369,11 @@ async function routeAndExecute(
             session,
             ...routeOptionsBase(),
         });
+        // ponytail: flaky planner may ignore image and pick chat; upgrade path = vision-aware classifier
+        if (mediaParts.length > 0 && filterSpecialistDomains(domains).length === 0) {
+            console.log('🧭 Media present but planner chose chat — forcing expense');
+            domains = ['expense'];
+        }
     }
 
     const specialists = filterSpecialistDomains(domains);
