@@ -517,13 +517,53 @@ export async function getRecentWorkoutsForSuggestion(
     const endStr = end.toISOString().slice(0, 10);
 
     const history = await getWorkoutHistory(telegramUserId, startStr, endStr);
+    return { history, daysBack, ...summarizeWorkoutsForSuggestion(history) };
+}
 
+export type SuggestHorizon = 'today' | 'week';
+
+export function normalizeSuggestHorizon(value?: string | null): SuggestHorizon {
+    return value === 'week' ? 'week' : 'today';
+}
+
+export function daysBackForHorizon(horizon: SuggestHorizon): number {
+    return horizon === 'week' ? 21 : 14;
+}
+
+/** History is newest-first; first sighting of an exercise is its last load. */
+export function summarizeWorkoutsForSuggestion(history: WorkoutExerciseRecord[]) {
     const exerciseCounts: Record<string, number> = {};
+    const lastLoads: Record<
+        string,
+        {
+            sets: number | null;
+            reps: number | null;
+            weightKg: number | null;
+            weightsKgText: string | null;
+            date: string;
+        }
+    > = {};
+    const recentSessionLabels: string[] = [];
+    const seenLabels = new Set<string>();
+
     for (const w of history) {
         exerciseCounts[w.exercise] = (exerciseCounts[w.exercise] || 0) + 1;
+        if (!lastLoads[w.exercise]) {
+            lastLoads[w.exercise] = {
+                sets: w.sets,
+                reps: w.reps,
+                weightKg: w.weightKg,
+                weightsKgText: w.weightsKgText,
+                date: w.date,
+            };
+        }
+        if (w.sessionLabel && !seenLabels.has(w.sessionLabel)) {
+            seenLabels.add(w.sessionLabel);
+            recentSessionLabels.push(w.sessionLabel);
+        }
     }
 
-    return { history, exerciseCounts, daysBack };
+    return { exerciseCounts, lastLoads, recentSessionLabels };
 }
 
 // ponytail self-check: defaults + progressive weights + supersets without DB

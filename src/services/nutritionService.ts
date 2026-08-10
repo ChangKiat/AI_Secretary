@@ -496,6 +496,27 @@ export async function getTodayProteinRemaining(telegramUserId: number, date: str
     };
 }
 
+/** Macros remaining + recent meal names for suggestion variety. */
+export async function getMealSuggestionContext(
+    telegramUserId: number,
+    date: string,
+    recentLimit = 5
+) {
+    const remaining = await getTodayProteinRemaining(telegramUserId, date);
+    const start = new Date(`${date}T12:00:00`);
+    start.setDate(start.getDate() - 7);
+    const startStr = start.toISOString().slice(0, 10);
+    const history = await getMealHistory(telegramUserId, startStr, date);
+    const recentMeals = history.slice(0, recentLimit).map((m) => ({
+        date: m.date,
+        mealType: m.mealType,
+        description: m.description,
+        proteinG: m.proteinG,
+        calories: m.calories,
+    }));
+    return { ...remaining, recentMeals };
+}
+
 // ponytail self-check: bulk meal reply format without DB
 if (require.main === module) {
     const progress = buildDayProgress(

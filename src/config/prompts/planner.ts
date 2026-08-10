@@ -17,6 +17,9 @@ Multi-domain examples:
 - Bank/credit card statement image → expense only
 - Gym photo or workout description → workout
 - Gym machine results screen photo + exercise caption → workout (log cardio from the screen AND caption exercises together)
+- "what should I train" / workout ideas → workout
+- "what should I eat" / meal ideas → meal
+- "plan my week" / weekly fitness + meal plan → workout AND meal (never chat)
 - Event flyer or "schedule meeting Friday" → calendar
 
 When the user is replying to a confirmation (#id), route to the domain of that record type.

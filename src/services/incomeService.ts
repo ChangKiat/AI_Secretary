@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm';
 import { resolvePaymentMethod } from '../config/paymentMethods';
 import { requireDb } from '../db/client';
-import { expenses, incomes } from '../db/schema';
+import { expenses, incomes, investmentEvents } from '../db/schema';
 
 const INCOME_CATEGORIES = ['Claim', 'Transfer', 'Salary', 'Account transfer', 'Cashback', 'Other'] as const;
 export type IncomeCategory = (typeof INCOME_CATEGORIES)[number];
@@ -105,7 +105,7 @@ export async function appendIncome(
 
 export async function appendReimbursements(
     expenseId: number,
-    items: { source: string; amount: number }[],
+    items: { source: string; amount: number; paymentMethod?: string | null }[],
     date?: string
 ): Promise<number[]> {
     const db = requireDb();
@@ -121,6 +121,7 @@ export async function appendReimbursements(
                 description: `Reimbursement from ${item.source}`,
                 source: item.source,
                 expenseId,
+                paymentMethod: item.paymentMethod?.trim() || null,
             }))
         )
         .returning({ id: incomes.id });
@@ -339,6 +340,10 @@ export async function updateIncome(
 
 export async function deleteIncome(id: number): Promise<boolean> {
     const db = requireDb();
+    await db
+        .update(investmentEvents)
+        .set({ linkedIncomeId: null })
+        .where(eq(investmentEvents.linkedIncomeId, id));
     const result = await db.delete(incomes).where(eq(incomes.id, id));
     return (result.count ?? 0) > 0;
 }
@@ -419,6 +424,17 @@ export async function upsertRebateIncomes(
 
 export async function deleteIncomesByExpenseId(expenseId: number): Promise<number> {
     const db = requireDb();
+    const linked = await db
+        .select({ id: incomes.id })
+        .from(incomes)
+        .where(eq(incomes.expenseId, expenseId));
+    const ids = linked.map((row) => row.id);
+    if (ids.length > 0) {
+        await db
+            .update(investmentEvents)
+            .set({ linkedIncomeId: null })
+            .where(inArray(investmentEvents.linkedIncomeId, ids));
+    }
     const result = await db.delete(incomes).where(eq(incomes.expenseId, expenseId));
     return result.count ?? 0;
 }

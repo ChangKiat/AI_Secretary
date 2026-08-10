@@ -503,11 +503,16 @@ export const getWorkoutHistoryDeclaration: FunctionDeclaration = {
 
 export const suggestWorkoutDeclaration: FunctionDeclaration = {
     name: 'suggest_workout',
-    description: 'Fetches recent workout history and suggests the next training session based on patterns.',
+    description:
+        'Fetches recent workout history and suggests the next session (today) or a weekly training outline (week). Call when the user asks what to train or to plan workouts.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
             focus: { type: SchemaType.STRING, description: 'Optional focus: push, pull, legs, cardio, full body.' },
+            horizon: {
+                type: SchemaType.STRING,
+                description: 'today = next session; week = 3–6 day training outline. Defaults to today.',
+            },
         },
     },
 };
@@ -547,11 +552,16 @@ export const getNutritionSummaryDeclaration: FunctionDeclaration = {
 
 export const suggestMealDeclaration: FunctionDeclaration = {
     name: 'suggest_meal',
-    description: 'Suggests foods based on remaining daily protein, calorie, carb, and fat targets.',
+    description:
+        'Suggests foods from remaining daily macros (today) or a 7-day meal pattern (week). Prefer Malaysian/hawker-friendly options. Call when the user asks what to eat or for a meal plan.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
             date: { type: SchemaType.STRING, description: 'YYYY-MM-DD. Defaults to today if omitted.' },
+            horizon: {
+                type: SchemaType.STRING,
+                description: 'today = next meal for remaining macros; week = 7-day meal pattern. Defaults to today.',
+            },
         },
     },
 };

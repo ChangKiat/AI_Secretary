@@ -46,13 +46,14 @@ import {
     formatBulkWorkoutLogReply,
     applyWorkoutDefaults,
     normalizeWeightsKg,
+    normalizeSuggestHorizon,
+    daysBackForHorizon,
     WorkoutLogEntry,
 } from '../services/gymService';
 import { estimateBurn, burnFromReportedCalories } from '../services/burnCalculator';
 import {
     logMeal,
     getNutritionSummary,
-    getTodayProteinRemaining,
     getTodayMacroProgress,
     updateNutritionTargets,
     uploadMealPhoto,
@@ -62,6 +63,7 @@ import {
     deleteMeal,
     getMealById,
     getNutritionTargets,
+    getMealSuggestionContext,
     MealBatchEntry,
 } from '../services/nutritionService';
 
@@ -1006,13 +1008,21 @@ export async function handleToolCall(
         await ctx.reply(toolResult.response.text());
         return 'complete';
     } else if (call.name === 'suggest_workout') {
-        const args = call.args as { focus?: string };
-        const data = await getRecentWorkoutsForSuggestion(userId);
+        const args = call.args as { focus?: string; horizon?: string };
+        const horizon = normalizeSuggestHorizon(args.horizon);
+        const data = await getRecentWorkoutsForSuggestion(
+            userId,
+            daysBackForHorizon(horizon)
+        );
         const toolResult = await chat.sendMessage([
             {
                 functionResponse: {
                     name: 'suggest_workout',
-                    response: { ...data, requestedFocus: args.focus || null },
+                    response: {
+                        ...data,
+                        requestedFocus: args.focus || null,
+                        horizon,
+                    },
                 },
             },
         ]);
@@ -1199,11 +1209,17 @@ export async function handleToolCall(
         await ctx.reply(toolResult.response.text());
         return 'complete';
     } else if (call.name === 'suggest_meal') {
-        const args = call.args as { date?: string };
+        const args = call.args as { date?: string; horizon?: string };
         const date = args.date || todayISO();
-        const remaining = await getTodayProteinRemaining(userId, date);
+        const horizon = normalizeSuggestHorizon(args.horizon);
+        const remaining = await getMealSuggestionContext(userId, date);
         const toolResult = await chat.sendMessage([
-            { functionResponse: { name: 'suggest_meal', response: remaining } },
+            {
+                functionResponse: {
+                    name: 'suggest_meal',
+                    response: { ...remaining, horizon },
+                },
+            },
         ]);
         await ctx.reply(toolResult.response.text());
         return 'complete';

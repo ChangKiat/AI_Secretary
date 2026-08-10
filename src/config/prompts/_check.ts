@@ -84,6 +84,18 @@ assert(
     'workout prompt must log machine screen calories with caption exercises'
 );
 assert(
+    workoutDomainPrompt.includes('SUGGEST') && workoutDomainPrompt.includes('horizon week'),
+    'workout prompt must call suggest_workout for training ideas and weekly plans'
+);
+assert(
+    mealDomainPrompt.includes('SUGGEST') && mealDomainPrompt.includes('Malaysian'),
+    'meal prompt must call suggest_meal with Malaysian food preference'
+);
+assert(
+    planner.includes('plan my week') && planner.includes('workout AND meal'),
+    'planner must route weekly fitness+meal plan to workout AND meal'
+);
+assert(
     planner.includes('machine results') || planner.includes('machine screen'),
     'planner must route machine screen + caption to workout'
 );

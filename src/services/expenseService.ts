@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { requireDb } from '../db/client';
-import { expenses, fixedExpenses } from '../db/schema';
+import { expenses, fixedExpenses, investmentEvents } from '../db/schema';
 import { getExpenseCategories, resolveCategory } from '../config/expenseCategories';
 import {
     paymentMethodBucket,
@@ -486,6 +486,11 @@ export async function getExpenseById(id: number) {
 
 export async function deleteExpense(id: number): Promise<boolean> {
     const db = requireDb();
+    // Portfolio buy cash-sync FKs block expense delete unless unlinked first.
+    await db
+        .update(investmentEvents)
+        .set({ linkedExpenseId: null })
+        .where(eq(investmentEvents.linkedExpenseId, id));
     await deleteIncomesByExpenseId(id);
     const result = await db.delete(expenses).where(eq(expenses.id, id));
     return (result.count ?? 0) > 0;

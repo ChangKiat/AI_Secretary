@@ -121,3 +121,54 @@ export const userSettings = pgTable('user_settings', {
     salaryAfterTax: numeric('salary_after_tax', { precision: 12, scale: 2 }).default('0').notNull(),
     bodyWeightKg: numeric('body_weight_kg', { precision: 6, scale: 2 }),
 });
+
+/** equity | fund | fd | other */
+export const investmentInstruments = pgTable('investment_instruments', {
+    id: serial('id').primaryKey(),
+    paymentAccountId: integer('payment_account_id')
+        .notNull()
+        .references(() => paymentAccounts.id),
+    kind: text('kind').notNull(),
+    symbol: text('symbol'),
+    name: text('name').notNull(),
+    currency: text('currency').default('MYR').notNull(),
+    lastPrice: numeric('last_price', { precision: 12, scale: 6 }),
+    lastPriceAt: text('last_price_at'),
+    principal: numeric('principal', { precision: 12, scale: 2 }),
+    annualRatePct: numeric('annual_rate_pct', { precision: 8, scale: 4 }),
+    startDate: text('start_date'),
+    maturityDate: text('maturity_date'),
+    active: boolean('active').default(true).notNull(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+/** buy | sell | dividend | interest | fee | price_mark */
+export const investmentEvents = pgTable('investment_events', {
+    id: serial('id').primaryKey(),
+    instrumentId: integer('instrument_id')
+        .notNull()
+        .references(() => investmentInstruments.id),
+    eventType: text('event_type').notNull(),
+    date: text('date').notNull(),
+    quantity: numeric('quantity', { precision: 18, scale: 8 }),
+    unitPrice: numeric('unit_price', { precision: 12, scale: 6 }),
+    amount: numeric('amount', { precision: 12, scale: 2 }),
+    realizedGain: numeric('realized_gain', { precision: 12, scale: 2 }),
+    notes: text('notes'),
+    linkedIncomeId: integer('linked_income_id').references(() => incomes.id),
+    linkedExpenseId: integer('linked_expense_id').references(() => expenses.id),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const investmentLots = pgTable('investment_lots', {
+    id: serial('id').primaryKey(),
+    instrumentId: integer('instrument_id')
+        .notNull()
+        .references(() => investmentInstruments.id),
+    openedAt: text('opened_at').notNull(),
+    quantity: numeric('quantity', { precision: 18, scale: 8 }).notNull(),
+    remainingQty: numeric('remaining_qty', { precision: 18, scale: 8 }).notNull(),
+    unitCost: numeric('unit_cost', { precision: 12, scale: 6 }).notNull(),
+    buyEventId: integer('buy_event_id').references(() => investmentEvents.id),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});
