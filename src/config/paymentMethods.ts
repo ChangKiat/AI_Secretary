@@ -13,6 +13,8 @@ const ALIAS_MAP: Record<string, string> = {
     touchngo: 'TnG',
 };
 
+const NOISE_TOKENS = new Set(['a', 'an', 'the', 'my', 'via', 'with', 'from', 'on', 'using']);
+
 let cachedAccounts: PaymentAccount[] = [];
 let nameByLower = new Map<string, string>();
 let paymentMethodDescription = '';
@@ -62,6 +64,44 @@ export function getExpensePaymentAccountNames(): string[] {
         .map((account) => account.name);
 }
 
+function tokenize(lower: string): string[] {
+    return lower
+        .split(/[^a-z0-9]+/)
+        .filter((t) => t.length > 0 && !NOISE_TOKENS.has(t));
+}
+
+/** Every input token must appear as a whole account token or as a prefix of one. */
+function accountMatchesTokens(accountLower: string, inputTokens: string[]): boolean {
+    const accountTokens = tokenize(accountLower);
+    return inputTokens.every((t) =>
+        accountTokens.some((at) => at === t || at.startsWith(t))
+    );
+}
+
+/**
+ * Fuzzy match nicknames to existing accounts only (e.g. "world card" → "RHB world credit card").
+ * Score: inputTokenCount * 100 - accountTokenCount; tie → lexicographically first name.
+ */
+export function fuzzyMatchPaymentAccount(lower: string): string | null {
+    const inputTokens = tokenize(lower);
+    if (inputTokens.length === 0 || nameByLower.size === 0) return null;
+
+    let bestName: string | null = null;
+    let bestScore = -Infinity;
+
+    const entries = [...nameByLower.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+    for (const [accountLower, canonical] of entries) {
+        if (!accountMatchesTokens(accountLower, inputTokens)) continue;
+        const accountTokenCount = tokenize(accountLower).length;
+        const score = inputTokens.length * 100 - accountTokenCount;
+        if (score > bestScore) {
+            bestScore = score;
+            bestName = canonical;
+        }
+    }
+    return bestName;
+}
+
 export function resolvePaymentMethod(input?: string | null): string | null {
     if (input == null) return null;
     const trimmed = input.trim();
@@ -71,9 +111,12 @@ export function resolvePaymentMethod(input?: string | null): string | null {
     if (nameByLower.has(lower)) return nameByLower.get(lower)!;
 
     const alias = ALIAS_MAP[lower];
-    if (alias) return nameByLower.get(alias.toLowerCase()) ?? alias;
+    if (alias) {
+        const fromAlias = nameByLower.get(alias.toLowerCase());
+        if (fromAlias) return fromAlias;
+    }
 
-    return trimmed;
+    return fuzzyMatchPaymentAccount(lower);
 }
 
 export function paymentMethodsMatch(
