@@ -29,6 +29,13 @@ import {
     ReplyRecordTarget,
 } from '../services/incomeService';
 import {
+    addInterestSchedule,
+    deactivateInterestScheduleByDescription,
+    getActiveInterestSchedules,
+    updateInterestScheduleById,
+    type InterestFrequency,
+} from '../services/interestScheduleService';
+import {
     createCalendarEvent,
     getSchedule,
     findCalendarEvents,
@@ -219,6 +226,10 @@ const KNOWN_TOOL_NAMES = new Set([
     'update_fixed_expense',
     'get_all_fixed_expenses',
     'delete_fixed_expense',
+    'add_interest_schedule',
+    'update_interest_schedule',
+    'get_all_interest_schedules',
+    'delete_interest_schedule',
     'create_calendar_event',
     'check_schedule',
     'reschedule_calendar_event',
@@ -683,6 +694,167 @@ export async function handleToolCall(
         } else {
             await ctx.reply(
                 `🗑️ Done! I have completely removed "${args.description}" from your recurring bills.`
+            );
+        }
+        return 'complete';
+    } else if (call.name === 'add_interest_schedule') {
+        const args = call.args as {
+            paymentMethod: string;
+            frequency: string;
+            dayOfMonth?: number;
+            annualRatePct?: number;
+            fixedAmount?: number;
+            currency?: string;
+            description?: string;
+        };
+        const frequency = (args.frequency?.toLowerCase() === 'monthly'
+            ? 'monthly'
+            : 'daily') as InterestFrequency;
+        const paymentMethod = resolvePaymentMethod(args.paymentMethod) ?? args.paymentMethod;
+        if (!paymentMethod?.trim()) {
+            await ctx.reply('⚠️ Please specify a valid payment account for interest.');
+            return 'complete';
+        }
+        const resolvedAccount = paymentMethod.trim();
+        const description =
+            args.description?.trim() ||
+            `${resolvedAccount} ${frequency} interest`;
+
+        await addInterestSchedule({
+            paymentMethod: resolvedAccount,
+            frequency,
+            dayOfMonth: frequency === 'monthly' ? args.dayOfMonth ?? 1 : null,
+            annualRatePct: args.annualRatePct ?? null,
+            fixedAmount: args.fixedAmount ?? null,
+            currency: args.currency || 'MYR',
+            description,
+        });
+        await chat.sendMessage([
+            {
+                functionResponse: {
+                    name: 'add_interest_schedule',
+                    response: { status: 'success' },
+                },
+            },
+        ]);
+
+        const ratePart =
+            args.fixedAmount != null
+                ? `RM ${args.fixedAmount} fixed`
+                : args.annualRatePct != null
+                  ? `${args.annualRatePct}% p.a.`
+                  : 'configured rate';
+        const whenPart =
+            frequency === 'daily'
+                ? 'daily'
+                : `monthly on day ${args.dayOfMonth ?? 1}`;
+        await ctx.reply(
+            `💰 Done! I'll accrue ${description} ${whenPart} for ${resolvedAccount} (${ratePart}).`
+        );
+        return 'complete';
+    } else if (call.name === 'update_interest_schedule') {
+        const args = call.args as {
+            description: string;
+            annualRatePct?: number;
+            fixedAmount?: number;
+            frequency?: string;
+            dayOfMonth?: number;
+        };
+        const schedules = await getActiveInterestSchedules();
+        const match = schedules.find((s) =>
+            s.description.toLowerCase().includes(args.description.toLowerCase())
+        );
+        if (!match) {
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'update_interest_schedule',
+                        response: { status: 'not_found' },
+                    },
+                },
+            ]);
+            await ctx.reply(
+                `⚠️ I couldn't find any interest schedule matching "${args.description}".`
+            );
+            return 'complete';
+        }
+
+        const fields: {
+            annualRatePct?: number | null;
+            fixedAmount?: number | null;
+            frequency?: InterestFrequency;
+            dayOfMonth?: number | null;
+        } = {};
+        if (args.annualRatePct !== undefined) fields.annualRatePct = args.annualRatePct;
+        if (args.fixedAmount !== undefined) fields.fixedAmount = args.fixedAmount;
+        if (args.frequency != null) {
+            fields.frequency = (
+                args.frequency.toLowerCase() === 'monthly' ? 'monthly' : 'daily'
+            ) as InterestFrequency;
+        }
+        if (args.dayOfMonth !== undefined) fields.dayOfMonth = args.dayOfMonth;
+
+        await updateInterestScheduleById(match.id, fields);
+        await chat.sendMessage([
+            {
+                functionResponse: {
+                    name: 'update_interest_schedule',
+                    response: { status: 'success' },
+                },
+            },
+        ]);
+        await ctx.reply(`✅ Updated interest schedule "${match.description}".`);
+        return 'complete';
+    } else if (call.name === 'get_all_interest_schedules') {
+        const schedules = await getActiveInterestSchedules();
+        await chat.sendMessage([
+            {
+                functionResponse: {
+                    name: 'get_all_interest_schedules',
+                    response: { schedules },
+                },
+            },
+        ]);
+        await ctx.reply(
+            schedules.length === 0
+                ? 'No active interest schedules.'
+                : schedules
+                      .map((s) => {
+                          const rate =
+                              s.fixedAmount != null
+                                  ? `RM ${s.fixedAmount} fixed`
+                                  : s.annualRatePct != null
+                                    ? `${s.annualRatePct}% p.a.`
+                                    : 'no rate';
+                          const when =
+                              s.frequency === 'daily'
+                                  ? 'daily'
+                                  : `monthly (day ${s.dayOfMonth})`;
+                          return `• ${s.description} — ${s.paymentMethod}, ${when}, ${rate}`;
+                      })
+                      .join('\n')
+        );
+        return 'complete';
+    } else if (call.name === 'delete_interest_schedule') {
+        const args = call.args as { description: string };
+        const deleteStatus = await deactivateInterestScheduleByDescription(args.description);
+        await chat.sendMessage([
+            {
+                functionResponse: {
+                    name: 'delete_interest_schedule',
+                    response: {
+                        status: deleteStatus === true ? 'success' : 'failed',
+                    },
+                },
+            },
+        ]);
+        if (deleteStatus === 'not_found') {
+            await ctx.reply(
+                `⚠️ I couldn't find any interest schedule matching "${args.description}".`
+            );
+        } else {
+            await ctx.reply(
+                `🗑️ Removed interest schedule matching "${args.description}".`
             );
         }
         return 'complete';

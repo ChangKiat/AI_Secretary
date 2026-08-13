@@ -5,6 +5,10 @@ import { GoogleGenerativeAI, GenerativeModel, ChatSession } from '@google/genera
 import 'dotenv/config';
 import { appendExpense, getFixedExpensesForToday, formatBulkExpenseLogReply } from './services/expenseService';
 import { upsertInvestmentFundingTransfer, resolveReplyRecord } from './services/incomeService';
+import {
+    accrueInterestForSchedule,
+    getInterestSchedulesForToday,
+} from './services/interestScheduleService';
 import { handleToolCall } from './tools/toolHandler';
 import { formatBulkWorkoutLogReply } from './services/gymService';
 import {
@@ -150,6 +154,33 @@ async function main() {
                 await bot.telegram.sendMessage(MY_CHAT_ID, msg, { parse_mode: 'Markdown' });
             } catch (error) {
                 console.error('Cron Job Error:', error);
+            }
+        },
+        { timezone: 'Asia/Kuala_Lumpur' }
+    );
+
+    cron.schedule(
+        '0 9 * * *',
+        async () => {
+            try {
+                const schedulesDue = await getInterestSchedulesForToday();
+                if (schedulesDue.length === 0) return;
+
+                console.log(`Found ${schedulesDue.length} interest schedules for today. Accruing...`);
+                let loggedList = '';
+
+                for (const sched of schedulesDue) {
+                    const result = await accrueInterestForSchedule(sched);
+                    if (!result) continue;
+                    loggedList += `\n- ${sched.description} (${sched.currency} ${result.amount.toFixed(2)} → ${sched.paymentMethod})`;
+                }
+
+                if (!loggedList) return;
+
+                const msg = `💰 *Interest accrued:* Good morning! I just logged today's scheduled interest:${loggedList}`;
+                await bot.telegram.sendMessage(MY_CHAT_ID, msg, { parse_mode: 'Markdown' });
+            } catch (error) {
+                console.error('Interest Cron Job Error:', error);
             }
         },
         { timezone: 'Asia/Kuala_Lumpur' }

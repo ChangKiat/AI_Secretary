@@ -3,7 +3,7 @@ import { resolvePaymentMethod } from '../config/paymentMethods';
 import { requireDb } from '../db/client';
 import { expenses, incomes, investmentEvents } from '../db/schema';
 
-const INCOME_CATEGORIES = ['Claim', 'Transfer', 'Salary', 'Account transfer', 'Cashback', 'Other'] as const;
+const INCOME_CATEGORIES = ['Claim', 'Transfer', 'Salary', 'Account transfer', 'Cashback', 'Interest', 'Other'] as const;
 export type IncomeCategory = (typeof INCOME_CATEGORIES)[number];
 
 function todayInKL(): string {

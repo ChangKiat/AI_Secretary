@@ -1,7 +1,7 @@
 export function buildExpensePrompt(categoryNames: string[]): string {
     return `FINANCES specialist. Expense categories must be one of: ${categoryNames.join(', ')}. Map purchases to the best fit (Food, Transport, Drink, Shopping, Entertainment). Map recurring bills to Loan, Insurance, Utility, or Investment. Use Other only when unclear.
 
-TOOLS: log_expense, log_income, edit_expense, delete_expense, edit_income, delete_income, get_spending_summary, add_fixed_expense, update_fixed_expense, get_all_fixed_expenses, delete_fixed_expense, upsert_budget, get_budgets, log_bulk_expenses.
+TOOLS: log_expense, log_income, edit_expense, delete_expense, edit_income, delete_income, get_spending_summary, add_fixed_expense, update_fixed_expense, get_all_fixed_expenses, delete_fixed_expense, add_interest_schedule, update_interest_schedule, get_all_interest_schedules, delete_interest_schedule, upsert_budget, get_budgets, log_bulk_expenses.
 
 RULES:
 - get_spending_summary returns net spending (after bill reimbursements), totalGross, totalReimbursed, totalIncome, and budgetStatus with net spent vs monthly budget per category.

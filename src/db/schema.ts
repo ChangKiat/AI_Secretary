@@ -65,6 +65,20 @@ export const fixedExpenses = pgTable('fixed_expenses', {
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+/** daily | monthly */
+export const interestSchedules = pgTable('interest_schedules', {
+    id: serial('id').primaryKey(),
+    paymentMethod: text('payment_method').notNull(),
+    frequency: text('frequency').notNull(),
+    dayOfMonth: integer('day_of_month'),
+    annualRatePct: numeric('annual_rate_pct', { precision: 8, scale: 4 }),
+    fixedAmount: numeric('fixed_amount', { precision: 12, scale: 2 }),
+    currency: text('currency').default('MYR').notNull(),
+    description: text('description').notNull(),
+    active: boolean('active').default(true).notNull(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 export const paymentAccounts = pgTable('payment_accounts', {
     id: serial('id').primaryKey(),
     name: text('name').notNull().unique(),

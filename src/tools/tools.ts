@@ -212,6 +212,82 @@ export const deleteFixedExpenseDeclaration: FunctionDeclaration = {
     },
 };
 
+function buildAddInterestScheduleDeclaration(): FunctionDeclaration {
+    return {
+        name: 'add_interest_schedule',
+        description:
+            'Sets up automated interest income for a debit account (e.g. TnG daily GO+ interest, bank savings monthly). Use when user mentions account earns interest daily/monthly.',
+        parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+                paymentMethod: {
+                    type: SchemaType.STRING,
+                    description: getPaymentMethodDescription(),
+                },
+                frequency: {
+                    type: SchemaType.STRING,
+                    description: 'How often interest is credited: daily or monthly.',
+                },
+                dayOfMonth: {
+                    type: SchemaType.NUMBER,
+                    description: 'Required for monthly. Day interest is credited (1-31).',
+                },
+                annualRatePct: {
+                    type: SchemaType.NUMBER,
+                    description: 'Annual interest rate as a percentage (e.g. 3.5 for 3.5%). Used when no fixed amount override.',
+                },
+                fixedAmount: {
+                    type: SchemaType.NUMBER,
+                    description: 'Optional fixed interest amount per period. Takes precedence over rate when set.',
+                },
+                currency: { type: SchemaType.STRING, description: 'Default MYR.' },
+                description: {
+                    type: SchemaType.STRING,
+                    description: 'Brief label, e.g. "TnG GO+ interest" or "CIMB savings interest".',
+                },
+            },
+            required: ['paymentMethod', 'frequency'],
+        },
+    };
+}
+
+export const updateInterestScheduleDeclaration: FunctionDeclaration = {
+    name: 'update_interest_schedule',
+    description: 'Updates an existing interest schedule (rate, fixed amount, frequency, or day).',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            description: {
+                type: SchemaType.STRING,
+                description: 'The schedule description to match (e.g. "TnG GO+ interest").',
+            },
+            annualRatePct: { type: SchemaType.NUMBER, description: 'New annual rate %.' },
+            fixedAmount: { type: SchemaType.NUMBER, description: 'New fixed amount override.' },
+            frequency: { type: SchemaType.STRING, description: 'daily or monthly.' },
+            dayOfMonth: { type: SchemaType.NUMBER, description: 'New day of month for monthly schedules.' },
+        },
+        required: ['description'],
+    },
+};
+
+export const getAllInterestSchedulesDeclaration: FunctionDeclaration = {
+    name: 'get_all_interest_schedules',
+    description: 'Lists all active automated interest schedules.',
+    parameters: { type: SchemaType.OBJECT, properties: {} },
+};
+
+export const deleteInterestScheduleDeclaration: FunctionDeclaration = {
+    name: 'delete_interest_schedule',
+    description: 'Removes an automated interest schedule.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            description: { type: SchemaType.STRING, description: 'Schedule description to remove.' },
+        },
+        required: ['description'],
+    },
+};
+
 function buildEditExpenseDeclaration(): FunctionDeclaration {
     return {
         name: 'edit_expense',
@@ -712,6 +788,10 @@ const EXPENSE_DECLARATIONS: FunctionDeclaration[] = [
     updateFixedExpenseDeclaration,
     getAllFixedExpensesDeclaration,
     deleteFixedExpenseDeclaration,
+    buildAddInterestScheduleDeclaration(),
+    updateInterestScheduleDeclaration,
+    getAllInterestSchedulesDeclaration,
+    deleteInterestScheduleDeclaration,
     upsertBudgetDeclaration,
     getBudgetsDeclaration,
     buildLogBulkExpensesDeclaration(),
