@@ -8,6 +8,17 @@ import {
     resolvePaymentMethod,
 } from '../config/paymentMethods';
 import { getReimbursementsByExpenseIds, getUnlinkedIncomeTotal, deleteIncomesByExpenseId } from './incomeService';
+import {
+    computeInstallmentSplit,
+    getPaidLoanIdsOnDate,
+    loanColumnsForCategory,
+    loanFieldsFromRow,
+    parseLoanMethod,
+    reverseLoanPayment,
+    type FixedExpenseLoanFields,
+    type InstallmentSplit,
+    type LoanMethod,
+} from './loanService';
 
 function todayInKL(): Date {
     return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
@@ -289,7 +300,8 @@ export async function addFixedExpense(
     frequency: number,
     startMonth: number,
     paymentMethod?: string | null,
-    toInvestmentAccount?: string | null
+    toInvestmentAccount?: string | null,
+    loan?: FixedExpenseLoanFields | null
 ) {
     const db = requireDb();
     const resolvedCategory = resolveCategory(category);
@@ -310,21 +322,24 @@ export async function addFixedExpense(
         toInvestmentAccount: keepDestination
             ? resolvePaymentMethod(toInvestmentAccount)
             : null,
+        ...loanColumnsForCategory(resolvedCategory, loan),
     });
     return true;
 }
 
-export async function getFixedExpensesForToday(): Promise<
-    {
-        date: string;
-        amount: number;
-        currency: string;
-        category: string;
-        description: string;
-        paymentMethod: string | null;
-        toInvestmentAccount: string | null;
-    }[]
-> {
+export type DueFixedExpense = {
+    id: number;
+    date: string;
+    amount: number;
+    currency: string;
+    category: string;
+    description: string;
+    paymentMethod: string | null;
+    toInvestmentAccount: string | null;
+    loan: (InstallmentSplit & { method: LoanMethod }) | null;
+};
+
+export async function getFixedExpensesForToday(): Promise<DueFixedExpense[]> {
     const db = requireDb();
     const today = todayInKL();
     const todayDay = today.getDate();
@@ -343,17 +358,45 @@ export async function getFixedExpensesForToday(): Promise<
         return ((monthDiff % freq) + freq) % freq === 0;
     });
 
-    return due.map((row) => ({
-        date: dateStr,
-        amount: parseFloat(row.amount),
-        currency: row.currency,
-        category: resolveCategory(row.category),
-        description: row.description,
-        paymentMethod: row.paymentMethod ? resolvePaymentMethod(row.paymentMethod) : null,
-        toInvestmentAccount: row.toInvestmentAccount
-            ? resolvePaymentMethod(row.toInvestmentAccount)
-            : null,
-    }));
+    const loanIds = due.filter((row) => parseLoanMethod(row.loanMethod)).map((row) => row.id);
+    const paidLoanIds = await getPaidLoanIdsOnDate(loanIds, dateStr);
+
+    return due.flatMap((row): DueFixedExpense[] => {
+        const base = {
+            id: row.id,
+            date: dateStr,
+            currency: row.currency,
+            category: resolveCategory(row.category),
+            description: row.description,
+            paymentMethod: row.paymentMethod ? resolvePaymentMethod(row.paymentMethod) : null,
+            toInvestmentAccount: row.toInvestmentAccount
+                ? resolvePaymentMethod(row.toInvestmentAccount)
+                : null,
+        };
+        const loan = loanFieldsFromRow(row);
+        if (!loan.loanMethod) {
+            return [{ ...base, amount: parseFloat(row.amount), loan: null }];
+        }
+        if ((loan.remainingPrincipal ?? 0) <= 0 || paidLoanIds.has(row.id)) {
+            return [];
+        }
+        const split = computeInstallmentSplit({
+            method: loan.loanMethod,
+            installment: parseFloat(row.amount),
+            remaining: loan.remainingPrincipal ?? 0,
+            originalPrincipal: loan.originalPrincipal ?? 0,
+            annualRatePct: loan.annualRatePct ?? 0,
+            tenureMonths: loan.tenureMonths ?? 0,
+        });
+        if (!split) return [];
+        return [
+            {
+                ...base,
+                amount: split.installment,
+                loan: { method: loan.loanMethod, ...split },
+            },
+        ];
+    });
 }
 
 export async function updateFixedExpensePrice(
@@ -486,6 +529,7 @@ export async function getExpenseById(id: number) {
 
 export async function deleteExpense(id: number): Promise<boolean> {
     const db = requireDb();
+    await reverseLoanPayment(id);
     // Portfolio buy cash-sync FKs block expense delete unless unlinked first.
     await db
         .update(investmentEvents)
@@ -516,6 +560,7 @@ export async function getActiveFixedExpenses() {
         toInvestmentAccount: row.toInvestmentAccount
             ? resolvePaymentMethod(row.toInvestmentAccount)
             : null,
+        ...loanFieldsFromRow(row),
     }));
 }
 
@@ -529,6 +574,7 @@ export async function updateFixedExpenseById(
         frequencyMonths?: number;
         paymentMethod?: string | null;
         toInvestmentAccount?: string | null;
+        loan?: FixedExpenseLoanFields | null;
     }
 ): Promise<boolean> {
     const db = requireDb();
@@ -551,6 +597,14 @@ export async function updateFixedExpenseById(
         if (c !== 'investment' && c !== 'other') {
             set.toInvestmentAccount = null;
         }
+    }
+
+    const nextCategory =
+        fields.category != null ? resolveCategory(fields.category) : undefined;
+    if (nextCategory && nextCategory.toLowerCase() !== 'loan') {
+        Object.assign(set, loanColumnsForCategory(nextCategory, null));
+    } else if (fields.loan !== undefined) {
+        Object.assign(set, loanColumnsForCategory(nextCategory ?? 'Loan', fields.loan));
     }
 
     if (Object.keys(set).length === 0) return false;

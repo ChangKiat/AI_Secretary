@@ -9,6 +9,7 @@ import {
     accrueInterestForSchedule,
     getInterestSchedulesForToday,
 } from './services/interestScheduleService';
+import { applyLoanPayment } from './services/loanService';
 import { handleToolCall } from './tools/toolHandler';
 import { formatBulkWorkoutLogReply } from './services/gymService';
 import {
@@ -145,9 +146,20 @@ async function main() {
                             toInvestmentAccount: exp.toInvestmentAccount,
                         });
                     }
+                    let loanNote = '';
+                    if (exp.loan) {
+                        const applied = await applyLoanPayment({
+                            fixedExpenseId: exp.id,
+                            date: exp.date,
+                            expenseId,
+                        });
+                        if (applied) {
+                            loanNote = ` · interest ${applied.interest.toFixed(2)} / principal ${applied.principal.toFixed(2)} / left ${applied.remainingAfter.toFixed(2)}`;
+                        }
+                    }
                     const via = exp.paymentMethod ? ` via ${exp.paymentMethod}` : '';
                     const toFund = exp.toInvestmentAccount ? ` → ${exp.toInvestmentAccount}` : '';
-                    loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount}${via}${toFund})`;
+                    loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount}${via}${toFund}${loanNote})`;
                 }
 
                 const msg = `🗓️ *Automated Billing:* Good morning! I just logged today's scheduled expenses:${loggedList}`;

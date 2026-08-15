@@ -62,6 +62,27 @@ export const fixedExpenses = pgTable('fixed_expenses', {
     active: boolean('active').default(true).notNull(),
     paymentMethod: text('payment_method'),
     toInvestmentAccount: text('to_investment_account'),
+    /** reducing | flat | included */
+    loanMethod: text('loan_method'),
+    originalPrincipal: numeric('original_principal', { precision: 12, scale: 2 }),
+    remainingPrincipal: numeric('remaining_principal', { precision: 12, scale: 2 }),
+    annualRatePct: numeric('annual_rate_pct', { precision: 8, scale: 4 }),
+    tenureMonths: integer('tenure_months'),
+    loanStartDate: text('loan_start_date'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const loanPayments = pgTable('loan_payments', {
+    id: serial('id').primaryKey(),
+    fixedExpenseId: integer('fixed_expense_id')
+        .notNull()
+        .references(() => fixedExpenses.id),
+    expenseId: integer('expense_id').references(() => expenses.id),
+    date: text('date').notNull(),
+    installment: numeric('installment', { precision: 12, scale: 2 }).notNull(),
+    interestAmount: numeric('interest_amount', { precision: 12, scale: 2 }).notNull(),
+    principalAmount: numeric('principal_amount', { precision: 12, scale: 2 }).notNull(),
+    remainingAfter: numeric('remaining_after', { precision: 12, scale: 2 }).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
