@@ -99,3 +99,9 @@ export function requireDb() {
 
 }
 
+export async function closeDb() {
+    if (client) {
+        await client.end();
+    }
+}
+
