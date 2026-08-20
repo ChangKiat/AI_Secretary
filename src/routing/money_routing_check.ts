@@ -1,4 +1,4 @@
-import { applyMoneyRoutingHints } from '../routing/router';
+import { applyMoneyRoutingHints, routeByHeuristics } from './router';
 
 function assert(condition: boolean, message: string) {
     if (!condition) throw new Error(message);
@@ -20,5 +20,24 @@ assert(
     JSON.stringify(plainFood) === JSON.stringify(['meal']),
     'plain food without price should be unchanged'
 );
+
+const dual = routeByHeuristics('i eat chicken rice today RM10 with TNG', false);
+assert(dual.includes('expense'), 'chicken rice+RM+TNG should include expense');
+assert(dual.includes('meal'), 'chicken rice+RM+TNG should include meal');
+
+const mealOnly = routeByHeuristics('had nasi lemak', false);
+assert(
+    JSON.stringify(mealOnly) === JSON.stringify(['meal']),
+    'plain food should be meal only'
+);
+
+const expenseOnly = routeByHeuristics('paid via TNG', false);
+assert(
+    JSON.stringify(expenseOnly) === JSON.stringify(['expense']),
+    'payment-only should be expense only'
+);
+
+const workout = routeByHeuristics('bench press 3x10', false);
+assert(workout.includes('workout'), 'bench press 3x10 should be workout');
 
 console.log('money_routing_check: ok');

@@ -35,12 +35,44 @@ const PRICE_SIGNAL =
 const PAYMENT_SIGNAL =
     /\b(tng|touch\s*(?:n|and|&)\s*go|touchngo|grabpay|shopeepay|cimb|maybank|cash|credit\s*card)\b/i;
 
+const FOOD_SIGNAL =
+    /\b(eat|ate|eaten|food|meal|lunch|dinner|breakfast|snack|protein|calorie|macro|nutrition|nasi|roti|kopi|chicken\s*rice|rice|soup|noodle|ramen|burger|pizza|salad|had)\b/i;
+const WORKOUT_SIGNAL =
+    /\b(gym|workout|exercise|training|bench|squat|deadlift|press|reps?|sets?|\d+\s*[x×]\s*\d+|cardio|run|jog)\b/i;
+const CALENDAR_SIGNAL =
+    /\b(meeting|calendar|schedule|reschedule|postpone|cancel\s+(?:the\s+)?(?:meeting|event)|am i free|event|appointment)\b/i;
+
 /** If text has price/payment, drop chat and ensure expense is included. */
 export function applyMoneyRoutingHints(text: string, domains: RouteDomain[]): RouteDomain[] {
     if (!PRICE_SIGNAL.test(text) && !PAYMENT_SIGNAL.test(text)) return domains;
     const next = domains.filter((d) => d !== 'chat');
     if (!next.includes('expense')) next.push('expense');
     return next.length > 0 ? next : ['expense'];
+}
+
+/**
+ * Keyword routing when SKIP_PLANNER is on.
+ * ponytail: regex heuristics miss ambiguous phrasing; upgrade path = restore planner or a tiny classifier.
+ */
+export function routeByHeuristics(text: string, hasMedia: boolean): RouteDomain[] {
+    const domains: RouteDomain[] = [];
+    const push = (d: RouteDomain) => {
+        if (!domains.includes(d)) domains.push(d);
+    };
+
+    if (PRICE_SIGNAL.test(text) || PAYMENT_SIGNAL.test(text)) push('expense');
+    if (FOOD_SIGNAL.test(text)) push('meal');
+    if (WORKOUT_SIGNAL.test(text)) push('workout');
+    if (CALENDAR_SIGNAL.test(text)) push('calendar');
+
+    let next = applyMoneyRoutingHints(text, domains);
+    if (filterSpecialistDomains(next).length === 0 && hasMedia) {
+        next = ['expense'];
+    }
+    if (next.length === 0) next = ['chat'];
+
+    console.log('🧭 Heuristic routed:', next.join(', '));
+    return next;
 }
 
 export async function routeMessage(

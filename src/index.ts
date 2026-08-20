@@ -17,6 +17,7 @@ import {
     createDomainModel,
     GEMINI_MODEL_DEFAULT,
     GEMINI_MODEL_HEAVY,
+    SKIP_PLANNER,
 } from './config/gemini';
 import { documentExpensePrompt } from './config/prompts';
 import { loadExpenseCategories } from './config/expenseCategories';
@@ -31,6 +32,7 @@ import {
 import { parseMaxPx, resizeForGemini } from './utils/imageForGemini';
 import {
     routeMessage,
+    routeByHeuristics,
     getOrCreateSession,
     getOrCreateDomainChat,
     filterSpecialistDomains,
@@ -403,6 +405,15 @@ async function routeAndExecute(
     let domains: import('./routing/router').RouteDomain[];
     if (options?.forceDomains) {
         domains = options.forceDomains;
+    } else if (session.awaitingInput && session.activeDomain) {
+        domains = [session.activeDomain];
+    } else if (SKIP_PLANNER) {
+        domains = routeByHeuristics(textForContext, mediaParts.length > 0);
+        const beforeMoney = domains.join(',');
+        domains = applyMoneyRoutingHints(textForContext, domains);
+        if (domains.join(',') !== beforeMoney) {
+            console.log('🧭 Money hint adjusted route:', domains.join(', '));
+        }
     } else {
         const plannerParts =
             mediaParts.length > 0
