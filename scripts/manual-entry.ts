@@ -3,7 +3,11 @@ import { appendExpense, updateExpense } from '../src/services/expenseService';
 import { appendIncome, updateIncome } from '../src/services/incomeService';
 import { loadExpenseCategories } from '../src/config/expenseCategories';
 import { loadPaymentAccounts } from '../src/config/paymentMethods';
+import { addInterestSchedule, InterestFrequency } from '../src/services/interestScheduleService';
+import { logBulkWorkouts } from '../src/services/gymService';
+import { updateNutritionTargets } from '../src/services/nutritionService';
 import { closeDb } from '../src/db/client';
+import { randomUUID } from 'crypto';
 
 type ExpensePayload = {
     kind: 'expense';
@@ -52,7 +56,57 @@ type UpdateIncomePayload = {
     fromPaymentMethod?: string | null;
 };
 
-type Payload = ExpensePayload | IncomePayload | UpdateExpensePayload | UpdateIncomePayload;
+type AddInterestSchedulePayload = {
+    kind: 'add_interest_schedule';
+    paymentMethod: string;
+    frequency: InterestFrequency;
+    dayOfMonth?: number | null;
+    annualRatePct?: number | null;
+    fixedAmount?: number | null;
+    currency?: string;
+    description: string;
+};
+
+type WorkoutBulkPayload = {
+    kind: 'workout_bulk';
+    telegramUserId: number;
+    date?: string;
+    sessionLabel?: string;
+    exercises: {
+        exercise: string;
+        sets?: number;
+        reps?: number;
+        weightKg?: number;
+        notes?: string;
+    }[];
+};
+
+type NutritionTargetsPayload = {
+    kind: 'nutrition_targets';
+    telegramUserId: number;
+    dailyProteinTargetG?: number;
+    dailyCalorieTarget?: number;
+    dailyCarbsTargetG?: number;
+    dailyFatTargetG?: number;
+    bodyWeightKg?: number;
+};
+
+type Payload =
+    | ExpensePayload
+    | IncomePayload
+    | UpdateExpensePayload
+    | UpdateIncomePayload
+    | AddInterestSchedulePayload
+    | WorkoutBulkPayload
+    | NutritionTargetsPayload;
+
+function todayInKL(): string {
+    const t = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
+    const y = t.getFullYear();
+    const m = String(t.getMonth() + 1).padStart(2, '0');
+    const d = String(t.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
 
 async function main() {
     const raw = process.argv[2];
@@ -96,6 +150,31 @@ async function main() {
         const { id, ...fields } = payload;
         const updated = await updateIncome(id, fields);
         console.log(JSON.stringify({ ok: updated, kind: 'update_income', id }));
+    } else if (payload.kind === 'add_interest_schedule') {
+        const ok = await addInterestSchedule({
+            paymentMethod: payload.paymentMethod,
+            frequency: payload.frequency,
+            dayOfMonth: payload.dayOfMonth,
+            annualRatePct: payload.annualRatePct,
+            fixedAmount: payload.fixedAmount,
+            currency: payload.currency,
+            description: payload.description,
+        });
+        console.log(JSON.stringify({ ok, kind: 'add_interest_schedule' }));
+    } else if (payload.kind === 'workout_bulk') {
+        const date = payload.date || todayInKL();
+        const sessionId = randomUUID();
+        await logBulkWorkouts(
+            payload.telegramUserId,
+            payload.exercises.map((e) => ({ ...e, date })),
+            sessionId,
+            payload.sessionLabel ?? null
+        );
+        console.log(JSON.stringify({ ok: true, kind: 'workout_bulk', sessionId, count: payload.exercises.length }));
+    } else if (payload.kind === 'nutrition_targets') {
+        const { telegramUserId, kind, ...targets } = payload;
+        await updateNutritionTargets(telegramUserId, targets);
+        console.log(JSON.stringify({ ok: true, kind: 'nutrition_targets', targets }));
     } else {
         console.error(`Unknown kind: ${(payload as Payload).kind}`);
         process.exit(1);
