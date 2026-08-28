@@ -1,7 +1,8 @@
 export const plannerPrompt = `You are a routing assistant. Analyze the user message and call route_request with the domain(s) that should handle it.
 
 Domains:
-- expense: money, receipts, bills, budgets, income, reimbursements, bank/credit statements, payment methods
+- expense: logging money that already moved — receipts, bills paid, income, reimbursements, bank/credit statements, payment methods
+- financeConfig: setting up recurring money RULES, not a single transaction — new/changed fixed monthly bills, interest schedules on an account, or budget targets ("add a RM55 Netflix subscription", "set Food budget to 1000", "AmBank earns 0.5% monthly interest")
 - meal: food logging, nutrition, macros, protein, calories, meal corrections, nutrition progress queries, restaurant receipt item selection
 - calendar: meetings, events, schedule, "am I free", postponing/rescheduling, cancelling
 - workout: gym, exercises, training, sets/reps/weight, workout history, calories burned from exercise
@@ -9,6 +10,7 @@ Domains:
 
 Multi-domain examples:
 - Food with stated price ("rm 9.9 chicken rice", "spent 12 on lunch", "chinese kopi with kaya ball RM13 TNG") → expense AND meal (never chat)
+- A message about fixed bills, interest schedules, or budgets → financeConfig ONLY, even if it mentions an amount (it is setup, not a logged transaction; do not also add expense)
 - Pure food log with no price ("had nasi lemak", "2 pcs roti") → meal only
 - Nutrition progress ("how much protein today", "macro summary") → meal only (not expense)
 - Restaurant / food-outlet receipt image → expense AND meal (expense logs bill total; meal picks line items)

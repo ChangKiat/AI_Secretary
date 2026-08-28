@@ -48,8 +48,8 @@ const MY_CHAT_ID = process.env.MY_TELEGRAM_CHAT_ID!;
 const GEMINI_IMAGE_MAX_PX = parseMaxPx(process.env.GEMINI_IMAGE_MAX_PX, 768);
 
 const MIN_TURNS = 2;
-const MAX_TURNS = 15;
-const SESSION_TTL_MS = 30 * 60 * 1000;
+const MAX_TURNS = 8;
+const SESSION_TTL_MS = 10 * 60 * 1000;
 
 const userSessions = new Map<number, UserChatState>();
 

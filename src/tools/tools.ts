@@ -761,10 +761,10 @@ export const routeRequestDeclaration: FunctionDeclaration = {
             domains: {
                 type: SchemaType.ARRAY,
                 description:
-                    'One or more domains: expense, meal, calendar, workout, or chat (no tools).',
+                    'One or more domains: expense, financeConfig, meal, calendar, workout, or chat (no tools).',
                 items: {
                     type: SchemaType.STRING,
-                    description: 'expense | meal | calendar | workout | chat',
+                    description: 'expense | financeConfig | meal | calendar | workout | chat',
                 },
             },
             reasoning: {
@@ -784,6 +784,10 @@ const EXPENSE_DECLARATIONS: FunctionDeclaration[] = [
     buildEditIncomeDeclaration(),
     deleteIncomeDeclaration,
     buildGetSummaryDeclaration(),
+    buildLogBulkExpensesDeclaration(),
+];
+
+const FINANCE_CONFIG_DECLARATIONS: FunctionDeclaration[] = [
     buildAddFixedExpenseDeclaration(),
     updateFixedExpenseDeclaration,
     getAllFixedExpensesDeclaration,
@@ -794,7 +798,6 @@ const EXPENSE_DECLARATIONS: FunctionDeclaration[] = [
     deleteInterestScheduleDeclaration,
     upsertBudgetDeclaration,
     getBudgetsDeclaration,
-    buildLogBulkExpensesDeclaration(),
 ];
 
 const MEAL_DECLARATIONS: FunctionDeclaration[] = [
@@ -831,6 +834,8 @@ export function getDomainDeclarations(domain: SpecialistDomain): FunctionDeclara
     switch (domain) {
         case 'expense':
             return EXPENSE_DECLARATIONS;
+        case 'financeConfig':
+            return FINANCE_CONFIG_DECLARATIONS;
         case 'meal':
             return MEAL_DECLARATIONS;
         case 'calendar':
@@ -843,6 +848,7 @@ export function getDomainDeclarations(domain: SpecialistDomain): FunctionDeclara
 export function getAllFunctionDeclarations(): FunctionDeclaration[] {
     return [
         ...EXPENSE_DECLARATIONS,
+        ...FINANCE_CONFIG_DECLARATIONS,
         ...CALENDAR_DECLARATIONS,
         ...WORKOUT_DECLARATIONS,
         ...MEAL_DECLARATIONS.filter((d) => d.name !== 'update_user_settings'),

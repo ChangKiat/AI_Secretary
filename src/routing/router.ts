@@ -2,8 +2,8 @@ import { GoogleGenerativeAI, ChatSession } from '@google/generative-ai';
 import { createDomainModel } from '../config/gemini';
 import { RouteDomain, SpecialistDomain } from '../config/prompts';
 
-const VALID_DOMAINS: RouteDomain[] = ['expense', 'meal', 'calendar', 'workout', 'chat'];
-const SPECIALIST_DOMAINS: SpecialistDomain[] = ['expense', 'meal', 'calendar', 'workout'];
+const VALID_DOMAINS: RouteDomain[] = ['expense', 'financeConfig', 'meal', 'calendar', 'workout', 'chat'];
+const SPECIALIST_DOMAINS: SpecialistDomain[] = ['expense', 'financeConfig', 'meal', 'calendar', 'workout'];
 
 export interface UserChatState {
     chats: Partial<Record<SpecialistDomain, ChatSession>>;
@@ -41,9 +41,12 @@ const WORKOUT_SIGNAL =
     /\b(gym|workout|exercise|training|bench|squat|deadlift|press|reps?|sets?|\d+\s*[x×]\s*\d+|cardio|run|jog)\b/i;
 const CALENDAR_SIGNAL =
     /\b(meeting|calendar|schedule|reschedule|postpone|cancel\s+(?:the\s+)?(?:meeting|event)|am i free|event|appointment)\b/i;
+const FINANCE_CONFIG_SIGNAL =
+    /\b(fixed (?:expense|bill)|recurring (?:bill|expense|payment|interest)|quarterly bill|yearly bill|interest schedule|automate interest|schedule.*interest|budgets?)\b/i;
 
-/** If text has price/payment, drop chat and ensure expense is included. */
+/** If text has price/payment, drop chat and ensure expense is included (unless financeConfig already owns it — setup, not a logged transaction). */
 export function applyMoneyRoutingHints(text: string, domains: RouteDomain[]): RouteDomain[] {
+    if (domains.includes('financeConfig')) return domains;
     if (!PRICE_SIGNAL.test(text) && !PAYMENT_SIGNAL.test(text)) return domains;
     const next = domains.filter((d) => d !== 'chat');
     if (!next.includes('expense')) next.push('expense');
@@ -55,6 +58,11 @@ export function applyMoneyRoutingHints(text: string, domains: RouteDomain[]): Ro
  * ponytail: regex heuristics miss ambiguous phrasing; upgrade path = restore planner or a tiny classifier.
  */
 export function routeByHeuristics(text: string, hasMedia: boolean): RouteDomain[] {
+    if (FINANCE_CONFIG_SIGNAL.test(text)) {
+        console.log('🧭 Heuristic routed: financeConfig');
+        return ['financeConfig'];
+    }
+
     const domains: RouteDomain[] = [];
     const push = (d: RouteDomain) => {
         if (!domains.includes(d)) domains.push(d);
