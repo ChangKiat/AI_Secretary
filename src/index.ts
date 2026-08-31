@@ -45,6 +45,7 @@ import cron from 'node-cron';
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 const MY_CHAT_ID = process.env.MY_TELEGRAM_CHAT_ID!;
+const AUTHORIZED_USER_ID = Number(MY_CHAT_ID);
 const GEMINI_IMAGE_MAX_PX = parseMaxPx(process.env.GEMINI_IMAGE_MAX_PX, 768);
 
 const MIN_TURNS = 2;
@@ -68,6 +69,26 @@ bot.catch((err, ctx) => {
     console.error(`🚨 CRITICAL ERROR in ${ctx.updateType} event:`);
     console.error(err);
 });
+
+// This bot is a single-user personal assistant — reject anyone but the owner
+// before any Gemini call or DB write happens.
+bot.use(async (ctx, next) => {
+    if (!ctx.from || ctx.from.id !== AUTHORIZED_USER_ID) {
+        console.warn(
+            `🚫 Blocked message from unauthorized user ${ctx.from?.id} (@${ctx.from?.username ?? 'unknown'})`
+        );
+        return;
+    }
+    return next();
+});
+
+async function notifyOwner(message: string) {
+    try {
+        await bot.telegram.sendMessage(MY_CHAT_ID, message, { parse_mode: 'Markdown' });
+    } catch (notifyError) {
+        console.error('Failed to send owner notification:', notifyError);
+    }
+}
 
 bot.command('setprotein', async (ctx) => {
     const text = ctx.message.text.replace('/setprotein', '').trim();
@@ -168,6 +189,8 @@ async function main() {
                 await bot.telegram.sendMessage(MY_CHAT_ID, msg, { parse_mode: 'Markdown' });
             } catch (error) {
                 console.error('Cron Job Error:', error);
+                const detail = error instanceof Error ? error.message : String(error);
+                await notifyOwner(`🚨 *Automated Billing failed:* Today's fixed expenses were NOT logged.\n${detail}`);
             }
         },
         { timezone: 'Asia/Kuala_Lumpur' }
@@ -195,6 +218,8 @@ async function main() {
                 await bot.telegram.sendMessage(MY_CHAT_ID, msg, { parse_mode: 'Markdown' });
             } catch (error) {
                 console.error('Interest Cron Job Error:', error);
+                const detail = error instanceof Error ? error.message : String(error);
+                await notifyOwner(`🚨 *Interest accrual failed:* Today's scheduled interest was NOT accrued.\n${detail}`);
             }
         },
         { timezone: 'Asia/Kuala_Lumpur' }
