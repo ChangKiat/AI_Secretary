@@ -724,6 +724,23 @@ export const updateUserSettingsDeclaration: FunctionDeclaration = {
     },
 };
 
+export const logBodyWeightDeclaration: FunctionDeclaration = {
+    name: 'log_body_weight',
+    description:
+        'Logs a body weight measurement to the weight history (used by the Dashboard trend chart). Use for "weight 85.5", "log my weight as 86kg", "weigh in: 85.5", or any morning weigh-in reply. This is the person\'s BODY weight, not a gym exercise load—never confuse with log_workout.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            weightKg: { type: SchemaType.NUMBER, description: 'Body weight in kg.' },
+            date: {
+                type: SchemaType.STRING,
+                description: 'YYYY-MM-DD. Defaults to today if omitted.',
+            },
+        },
+        required: ['weightKg'],
+    },
+};
+
 export const upsertBudgetDeclaration: FunctionDeclaration = {
     name: 'upsert_budget',
     description:
@@ -808,6 +825,7 @@ const MEAL_DECLARATIONS: FunctionDeclaration[] = [
     editMealDeclaration,
     deleteMealDeclaration,
     updateUserSettingsDeclaration,
+    logBodyWeightDeclaration,
 ];
 
 const CALENDAR_DECLARATIONS: FunctionDeclaration[] = [

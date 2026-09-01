@@ -225,6 +225,21 @@ async function main() {
         { timezone: 'Asia/Kuala_Lumpur' }
     );
 
+    cron.schedule(
+        '0 8 * * *',
+        async () => {
+            try {
+                await bot.telegram.sendMessage(
+                    MY_CHAT_ID,
+                    '⚖️ Morning weigh-in — step on the scale and reply like "weight 85.5" to log it.'
+                );
+            } catch (error) {
+                console.error('Weigh-in Reminder Cron Job Error:', error);
+            }
+        },
+        { timezone: 'Asia/Kuala_Lumpur' }
+    );
+
     bot.launch(() => {
         console.log('🤖 Secretary Bot is running...');
         console.log(`   Default model: ${GEMINI_MODEL_DEFAULT}`);

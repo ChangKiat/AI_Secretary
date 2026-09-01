@@ -73,6 +73,7 @@ import {
     getMealSuggestionContext,
     MealBatchEntry,
 } from '../services/nutritionService';
+import { upsertBodyWeightLog, getRecentBodyWeightLogs } from '../services/bodyWeightService';
 
 export type ToolCallResult = 'complete' | 'awaiting_input';
 
@@ -1467,6 +1468,27 @@ export async function handleToolCall(
                 ? `✅ Settings updated: ${parts.join(', ')}.`
                 : `✅ Settings updated.`
         );
+        return 'complete';
+    } else if (call.name === 'log_body_weight') {
+        const args = call.args as { weightKg: number; date?: string };
+        const date = args.date || todayISO();
+        await upsertBodyWeightLog(userId, date, args.weightKg);
+        await chat.sendMessage([
+            { functionResponse: { name: 'log_body_weight', response: { status: 'success' } } },
+        ]);
+
+        const recent = await getRecentBodyWeightLogs(userId, 2);
+        const previous = recent.find((r) => r.date !== date);
+        const delta =
+            previous != null ? args.weightKg - previous.weightKg : null;
+        const deltaText =
+            delta == null
+                ? ''
+                : delta === 0
+                  ? ' (no change since last log)'
+                  : ` (${delta > 0 ? '+' : ''}${delta.toFixed(2)}kg since ${previous!.date})`;
+
+        await ctx.reply(`⚖️ Logged ${args.weightKg}kg for ${date}.${deltaText}`);
         return 'complete';
     }
 

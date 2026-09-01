@@ -1,4 +1,4 @@
-import { pgTable, serial, text, numeric, integer, boolean, timestamp, bigint, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, numeric, integer, boolean, timestamp, bigint, jsonb, unique } from 'drizzle-orm/pg-core';
 
 export const trips = pgTable('trips', {
     id: serial('id').primaryKey(),
@@ -156,6 +156,18 @@ export const userSettings = pgTable('user_settings', {
     salaryAfterTax: numeric('salary_after_tax', { precision: 12, scale: 2 }).default('0').notNull(),
     bodyWeightKg: numeric('body_weight_kg', { precision: 6, scale: 2 }),
 });
+
+export const bodyWeightLogs = pgTable(
+    'body_weight_logs',
+    {
+        id: serial('id').primaryKey(),
+        telegramUserId: bigint('telegram_user_id', { mode: 'number' }).notNull(),
+        date: text('date').notNull(),
+        weightKg: numeric('weight_kg', { precision: 6, scale: 2 }).notNull(),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+    },
+    (t) => [unique('body_weight_logs_user_date').on(t.telegramUserId, t.date)]
+);
 
 /** equity | fund | fd | other */
 export const investmentInstruments = pgTable('investment_instruments', {

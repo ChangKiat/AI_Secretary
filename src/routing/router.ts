@@ -37,6 +37,7 @@ const PAYMENT_SIGNAL =
 
 const FOOD_SIGNAL =
     /\b(eat|ate|eaten|food|meal|lunch|dinner|breakfast|snack|protein|calorie|macro|nutrition|nasi|roti|kopi|chicken\s*rice|rice|soup|noodle|ramen|burger|pizza|salad|had)\b/i;
+const BODY_WEIGHT_SIGNAL = /\b(weigh[- ]?in|weight)\b/i;
 const WORKOUT_SIGNAL =
     /\b(gym|workout|exercise|training|bench|squat|deadlift|press|reps?|sets?|\d+\s*[x×]\s*\d+|cardio|run|jog)\b/i;
 const CALENDAR_SIGNAL =
@@ -69,7 +70,7 @@ export function routeByHeuristics(text: string, hasMedia: boolean): RouteDomain[
     };
 
     if (PRICE_SIGNAL.test(text) || PAYMENT_SIGNAL.test(text)) push('expense');
-    if (FOOD_SIGNAL.test(text)) push('meal');
+    if (FOOD_SIGNAL.test(text) || BODY_WEIGHT_SIGNAL.test(text)) push('meal');
     if (WORKOUT_SIGNAL.test(text)) push('workout');
     if (CALENDAR_SIGNAL.test(text)) push('calendar');
 
