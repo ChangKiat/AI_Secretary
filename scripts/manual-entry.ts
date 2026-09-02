@@ -5,7 +5,7 @@ import { loadExpenseCategories } from '../src/config/expenseCategories';
 import { loadPaymentAccounts } from '../src/config/paymentMethods';
 import { addInterestSchedule, InterestFrequency } from '../src/services/interestScheduleService';
 import { logBulkWorkouts } from '../src/services/gymService';
-import { updateNutritionTargets } from '../src/services/nutritionService';
+import { updateNutritionTargets, logMeal } from '../src/services/nutritionService';
 import { closeDb } from '../src/db/client';
 import { randomUUID } from 'crypto';
 
@@ -91,6 +91,18 @@ type NutritionTargetsPayload = {
     bodyWeightKg?: number;
 };
 
+type MealPayload = {
+    kind: 'meal';
+    telegramUserId: number;
+    date?: string;
+    mealType?: string;
+    description: string;
+    proteinG: number;
+    carbsG?: number;
+    fatG?: number;
+    calories?: number;
+};
+
 type Payload =
     | ExpensePayload
     | IncomePayload
@@ -98,7 +110,8 @@ type Payload =
     | UpdateIncomePayload
     | AddInterestSchedulePayload
     | WorkoutBulkPayload
-    | NutritionTargetsPayload;
+    | NutritionTargetsPayload
+    | MealPayload;
 
 function todayInKL(): string {
     const t = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
@@ -175,6 +188,19 @@ async function main() {
         const { telegramUserId, kind, ...targets } = payload;
         await updateNutritionTargets(telegramUserId, targets);
         console.log(JSON.stringify({ ok: true, kind: 'nutrition_targets', targets }));
+    } else if (payload.kind === 'meal') {
+        const date = payload.date || todayInKL();
+        const mealId = await logMeal(
+            payload.telegramUserId,
+            date,
+            payload.description,
+            payload.proteinG,
+            payload.mealType,
+            payload.carbsG,
+            payload.fatG,
+            payload.calories
+        );
+        console.log(JSON.stringify({ ok: true, kind: 'meal', mealId }));
     } else {
         console.error(`Unknown kind: ${(payload as Payload).kind}`);
         process.exit(1);
