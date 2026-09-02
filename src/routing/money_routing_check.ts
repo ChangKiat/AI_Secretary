@@ -40,4 +40,14 @@ assert(
 const workout = routeByHeuristics('bench press 3x10', false);
 assert(workout.includes('workout'), 'bench press 3x10 should be workout');
 
+const photoWithPaymentCaption = routeByHeuristics('tng rm14', true);
+assert(
+    photoWithPaymentCaption.includes('expense'),
+    'photo + payment-only caption should include expense'
+);
+assert(
+    photoWithPaymentCaption.includes('meal'),
+    'photo + payment-only caption should also include meal (caption alone cannot rule out food)'
+);
+
 console.log('money_routing_check: ok');

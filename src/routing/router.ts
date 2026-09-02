@@ -73,6 +73,10 @@ export function routeByHeuristics(text: string, hasMedia: boolean): RouteDomain[
     if (FOOD_SIGNAL.test(text) || BODY_WEIGHT_SIGNAL.test(text)) push('meal');
     if (WORKOUT_SIGNAL.test(text)) push('workout');
     if (CALENDAR_SIGNAL.test(text)) push('calendar');
+    // Caption-only regex can't see the photo, so a payment-note caption on a
+    // food photo (e.g. "tng rm14") would otherwise miss the meal log entirely.
+    // Mirrors the planner's own instruction: expense (+ meal if food outlet).
+    if (hasMedia && domains.includes('expense')) push('meal');
 
     let next = applyMoneyRoutingHints(text, domains);
     if (filterSpecialistDomains(next).length === 0 && hasMedia) {
