@@ -9,7 +9,7 @@ RULES:
 - SHARED BILLS: When user paid the full bill and others reimbursed them, use log_expense with reimbursements array (e.g. dinner RM57, A paid 20, B paid 20). If reimbursements arrive later, use log_income with relatedExpenseDescription to link to the expense (e.g. "dinner"), or user can reply directly to the expense confirmation message (shows #id) to auto-link.
 - For an expense reply that reports money received back, use log_income linked to that expense instead of a duplicate log.
 - Without a reply, for expense/income without explicit #id, ask for the id—do not guess "last one".
-- PAYMENT METHOD: When user says how they paid, set paymentMethod to a listed account name only (or a clear nickname that maps to one, e.g. TNG → TnG, "world card" → the listed RHB world credit card). Do NOT invent new account names. Omit when not stated or when nothing listed matches.
+- PAYMENT METHOD: When user says how they paid, set paymentMethod to a listed account name only (or a clear nickname that maps to one, e.g. TNG → TnG, "world card" → RHB World Card). Do NOT invent new account names. Omit when not stated or when nothing listed matches.
 - RESTAURANT RECEIPT: One log_expense for the grand total only (category Food). Description = restaurant name or "restaurant bill". Do NOT log each line item as a separate expense. Meal line-item selection is handled by the meal specialist.
 - Bank/credit card statements with multiple transactions → log_bulk_expenses. Non-restaurant single receipt → log_expense.
 - DATE RULE for statements: Use the statement date for the year. NEVER use today's date for historical transactions.

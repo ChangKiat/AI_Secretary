@@ -25,8 +25,11 @@ function account(
 
 setPaymentAccountsCache([
     account(1, 'TnG'),
-    account(2, 'RHB world credit card', 'credit'),
-    account(3, 'Credit Card', 'credit'),
+    account(2, 'Credit Card', 'credit'),
+    account(3, 'HongLeong Infinite', 'credit'),
+    account(4, 'HongLeong Platinum', 'credit'),
+    account(5, 'RHB Shell Card', 'credit'),
+    account(6, 'RHB World Card', 'credit'),
 ]);
 
 assert(resolvePaymentMethod('TNG') === 'TnG', 'TNG should resolve to TnG');
@@ -35,13 +38,48 @@ assert(resolvePaymentMethod('touch  n  go') === 'TnG', 'collapsed whitespace sho
 assert(resolvePaymentMethod('Touch-n-Go') === 'TnG', 'touch-n-go should resolve to TnG');
 
 assert(
-    resolvePaymentMethod('world card') === 'RHB world credit card',
-    'world card should resolve to RHB world credit card'
+    resolvePaymentMethod('HLB infinite') === 'HongLeong Infinite',
+    'HLB infinite should resolve to HongLeong Infinite'
 );
 assert(
-    resolvePaymentMethod('world credit card') === 'RHB world credit card',
-    'world credit card should resolve to RHB world credit card'
+    resolvePaymentMethod('HLB IF') === 'HongLeong Infinite',
+    'HLB IF should resolve to HongLeong Infinite'
 );
+assert(
+    resolvePaymentMethod('infinite') === 'HongLeong Infinite',
+    'infinite should resolve to HongLeong Infinite'
+);
+assert(
+    resolvePaymentMethod('HLB GSC') === 'HongLeong Platinum',
+    'HLB GSC should resolve to HongLeong Platinum'
+);
+assert(
+    resolvePaymentMethod('platinum') === 'HongLeong Platinum',
+    'platinum should fuzzy-resolve to HongLeong Platinum'
+);
+
+assert(
+    resolvePaymentMethod('Shell Card') === 'RHB Shell Card',
+    'Shell Card should resolve to RHB Shell Card'
+);
+assert(
+    resolvePaymentMethod('RHB Shell') === 'RHB Shell Card',
+    'RHB Shell should resolve to RHB Shell Card'
+);
+assert(
+    resolvePaymentMethod('shell') === 'RHB Shell Card',
+    'shell should fuzzy-resolve to RHB Shell Card'
+);
+
+assert(
+    resolvePaymentMethod('World Card') === 'RHB World Card',
+    'World Card should resolve to RHB World Card'
+);
+assert(
+    resolvePaymentMethod('RHB World') === 'RHB World Card',
+    'RHB World should resolve to RHB World Card'
+);
+
 assert(
     resolvePaymentMethod('totally fake wallet') === null,
     'unknown payment method should be null'

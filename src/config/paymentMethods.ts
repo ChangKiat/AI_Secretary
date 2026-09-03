@@ -11,6 +11,14 @@ const ALIAS_MAP: Record<string, string> = {
     'touch & go': 'TnG',
     'touch-n-go': 'TnG',
     touchngo: 'TnG',
+    'hlb infinite': 'HongLeong Infinite',
+    infinite: 'HongLeong Infinite',
+    'hlb if': 'HongLeong Infinite',
+    'hlb gsc': 'HongLeong Platinum',
+    'shell card': 'RHB Shell Card',
+    'rhb shell': 'RHB Shell Card',
+    'world card': 'RHB World Card',
+    'rhb world': 'RHB World Card',
 };
 
 const NOISE_TOKENS = new Set(['a', 'an', 'the', 'my', 'via', 'with', 'from', 'on', 'using']);
@@ -79,7 +87,7 @@ function accountMatchesTokens(accountLower: string, inputTokens: string[]): bool
 }
 
 /**
- * Fuzzy match nicknames to existing accounts only (e.g. "world card" → "RHB world credit card").
+ * Fuzzy match nicknames to existing accounts only (e.g. "shell" → "RHB Shell Card").
  * Score: inputTokenCount * 100 - accountTokenCount; tie → lexicographically first name.
  */
 export function fuzzyMatchPaymentAccount(lower: string): string | null {
