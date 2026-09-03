@@ -382,11 +382,13 @@ async function runChatTurn(
     const aiText = response.text();
     if (aiText && aiText.trim().length > 0) {
         await ctx.reply(aiText);
-    } else {
-        await ctx.reply("I processed that, but I couldn't find anything to log or report.");
+        // A genuine clarifying question (e.g. numbered receipt items, "what time?")
+        // needs a follow-up reply. A flat statement/refusal does not — staying
+        // "awaiting" would force the next, unrelated message into this same domain.
+        return aiText.trim().endsWith('?') ? 'awaiting_input' : 'complete';
     }
-    // Text-only reply (e.g. numbered receipt items) needs a follow-up from the user.
-    return 'awaiting_input';
+    await ctx.reply("I processed that, but I couldn't find anything to log or report.");
+    return 'complete';
 }
 
 async function runDomainTurn(

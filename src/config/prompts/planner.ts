@@ -23,6 +23,7 @@ Multi-domain examples:
 - "what should I eat" / meal ideas → meal
 - "plan my week" / weekly fitness + meal plan → workout AND meal (never chat)
 - Event flyer or "schedule meeting Friday" → calendar
+- A future social/meal plan with a date and time but no specific dish ("next Tuesday eat with a boy in pavilion dinner 7-8pm") → calendar ONLY, not meal — nothing was eaten yet, there's nothing to log nutritionally
 - "weight 85.5", "weigh in 86kg", or a bare number replying to the morning weigh-in reminder → meal (body weight log, not workout—workout weight means an exercise load like "bench press 60kg")
 
 When the user is replying to a confirmation (#id), route to the domain of that record type.

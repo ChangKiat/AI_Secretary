@@ -35,13 +35,22 @@ const PRICE_SIGNAL =
 const PAYMENT_SIGNAL =
     /\b(tng|touch\s*(?:n|and|&)\s*go|touchngo|grabpay|shopeepay|cimb|maybank|cash|credit\s*card)\b/i;
 
-const FOOD_SIGNAL =
-    /\b(eat|ate|eaten|food|meal|lunch|dinner|breakfast|snack|protein|calorie|macro|nutrition|nasi|roti|kopi|chicken\s*rice|rice|soup|noodle|ramen|burger|pizza|salad|had)\b/i;
+// Words that only signal food when no specific dish/nutrition term is present —
+// "dinner"/"eat" alone is ambiguous with a social plan (see SCHEDULE_SIGNAL below).
+const GENERIC_MEAL_SIGNAL = /\b(eat|ate|eaten|lunch|dinner|breakfast|supper|snack|had)\b/i;
+const SPECIFIC_FOOD_SIGNAL =
+    /\b(food|meal|protein|calorie|macro|nutrition|nasi|roti|kopi|chicken\s*rice|rice|soup|noodle|ramen|burger|pizza|salad)\b/i;
 const BODY_WEIGHT_SIGNAL = /\b(weigh[- ]?in|weight)\b/i;
 const WORKOUT_SIGNAL =
     /\b(gym|workout|exercise|training|bench|squat|deadlift|press|reps?|sets?|\d+\s*[x×]\s*\d+|cardio|run|jog)\b/i;
 const CALENDAR_SIGNAL =
     /\b(meeting|calendar|schedule|reschedule|postpone|cancel\s+(?:the\s+)?(?:meeting|event)|am i free|event|appointment)\b/i;
+// A future-date reference plus a clock time (e.g. "next Tuesday ... 7-8pm") means the
+// user is planning something, not logging a meal that already happened or is happening now.
+const FUTURE_DATE_SIGNAL =
+    /\b(next\s+(?:mon|tue|wed|thu|fri|sat|sun)\w*|this\s+(?:mon|tue|wed|thu|fri|sat|sun)\w*|tomorrow|tmr|tmrw)\b/i;
+const TIME_EXPR_SIGNAL =
+    /\b\d{1,2}(?::\d{2})?\s*(?:-|–|to)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i;
 const FINANCE_CONFIG_SIGNAL =
     /\b(fixed (?:expense|bill)|recurring (?:bill|expense|payment|interest)|quarterly bill|yearly bill|interest schedule|automate interest|schedule.*interest|budgets?)\b/i;
 
@@ -69,10 +78,16 @@ export function routeByHeuristics(text: string, hasMedia: boolean): RouteDomain[
         if (!domains.includes(d)) domains.push(d);
     };
 
+    const hasScheduleSignal = FUTURE_DATE_SIGNAL.test(text) && TIME_EXPR_SIGNAL.test(text);
+
     if (PRICE_SIGNAL.test(text) || PAYMENT_SIGNAL.test(text)) push('expense');
-    if (FOOD_SIGNAL.test(text) || BODY_WEIGHT_SIGNAL.test(text)) push('meal');
+    if (SPECIFIC_FOOD_SIGNAL.test(text) || BODY_WEIGHT_SIGNAL.test(text)) {
+        push('meal');
+    } else if (GENERIC_MEAL_SIGNAL.test(text) && !hasScheduleSignal) {
+        push('meal');
+    }
     if (WORKOUT_SIGNAL.test(text)) push('workout');
-    if (CALENDAR_SIGNAL.test(text)) push('calendar');
+    if (CALENDAR_SIGNAL.test(text) || hasScheduleSignal) push('calendar');
     // Caption-only regex can't see the photo, so a payment-note caption on a
     // food photo (e.g. "tng rm14") would otherwise miss the meal log entirely.
     // Mirrors the planner's own instruction: expense (+ meal if food outlet).
