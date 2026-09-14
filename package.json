@@ -22,7 +22,8 @@
     "db:push": "drizzle-kit push",
     "migrate:sheets": "tsx scripts/migrate-sheets-to-db.ts",
     "check:prompts": "tsx src/config/prompts/_check.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "postinstall": "patch-package"
   },
   "keywords": [],
   "author": "",
@@ -31,6 +32,7 @@
     "@types/node": "^25.5.2",
     "@types/node-cron": "^3.0.11",
     "drizzle-kit": "^0.31.10",
+    "patch-package": "^8.0.1",
     "tsx": "^4.22.3"
   }
 }

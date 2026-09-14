@@ -15,6 +15,8 @@ import { formatBulkWorkoutLogReply } from './services/gymService';
 import {
     createPlannerModel,
     createDomainModel,
+    startChatWithRetry,
+    isRetryableGeminiError,
     GEMINI_MODEL_DEFAULT,
     GEMINI_MODEL_HEAVY,
     SKIP_PLANNER,
@@ -306,11 +308,6 @@ async function buildReplyRecordContext(ctx: import('telegraf').Context): Promise
     };
 }
 
-function isGeminiOverloadError(error: unknown): boolean {
-    const msg = error instanceof Error ? error.message : String(error);
-    return msg.includes('503') || msg.includes('Service Unavailable') || msg.includes('high demand');
-}
-
 async function runChatTurn(
     chat: ChatSession,
     ctx: import('telegraf').Context,
@@ -409,8 +406,15 @@ async function runDomainTurn(
 }
 
 async function handleChatOnly(ctx: import('telegraf').Context, contextPrompt: string) {
-    const chat = plannerModel.startChat();
-    const result = await chat.sendMessage(contextPrompt);
+    let result;
+    try {
+        const chat = startChatWithRetry(plannerModel);
+        result = await chat.sendMessage(contextPrompt);
+    } catch (error) {
+        if (!isRetryableGeminiError(error)) throw error;
+        const heavyChat = startChatWithRetry(createPlannerModel(genAI, { heavy: true }), 0);
+        result = await heavyChat.sendMessage(contextPrompt);
+    }
     const aiText = result.response.text();
     if (aiText?.trim()) {
         await ctx.reply(aiText);
@@ -468,8 +472,8 @@ async function routeAndExecute(
         });
         // ponytail: flaky planner may ignore image and pick chat; upgrade path = vision-aware classifier
         if (mediaParts.length > 0 && filterSpecialistDomains(domains).length === 0) {
-            console.log('🧭 Media present but planner chose chat — forcing expense');
-            domains = ['expense'];
+            console.log('🧭 Media present but planner chose chat — forcing expense + meal');
+            domains = ['expense', 'meal'];
         }
         const beforeMoney = domains.join(',');
         domains = applyMoneyRoutingHints(textForContext, domains);
@@ -507,23 +511,23 @@ async function routeAndExecute(
                 awaitDomain = domain;
             }
         } catch (error) {
-            if (heavy && isGeminiOverloadError(error)) {
-                delete session.chats[domain];
-                const status = await runDomainTurn(
-                    domain,
-                    ctx,
-                    specialistParts,
-                    userId,
-                    session,
-                    mergedToolOptions,
-                    false
-                );
-                if (status === 'awaiting_input') {
-                    anyAwaiting = true;
-                    awaitDomain = domain;
-                }
-            } else {
-                throw error;
+            if (!isRetryableGeminiError(error)) throw error;
+            console.log(
+                `🧭 ${domain} (${heavy ? 'heavy' : 'lite'}) overloaded — retrying with ${heavy ? 'lite' : 'heavy'} model`
+            );
+            delete session.chats[domain];
+            const status = await runDomainTurn(
+                domain,
+                ctx,
+                specialistParts,
+                userId,
+                session,
+                mergedToolOptions,
+                !heavy
+            );
+            if (status === 'awaiting_input') {
+                anyAwaiting = true;
+                awaitDomain = domain;
             }
         }
     }
@@ -548,7 +552,11 @@ bot.on(message('text'), async (ctx) => {
     } catch (error: unknown) {
         console.error('Error:', error);
         const msg = error instanceof Error ? error.message : String(error);
-        if (msg.includes('429 Too Many Requests')) {
+        if (isRetryableGeminiError(error)) {
+            await ctx.reply(
+                '⏳ Gemini is overloaded right now (tried both models and it\'s still down). Please try again in a bit.'
+            );
+        } else if (msg.includes('429 Too Many Requests')) {
             await ctx.reply(
                 "⏳ Whoa, slow down! I'm hitting my API rate limit. Give me a moment to cool off."
             );
@@ -574,7 +582,7 @@ bot.on(message('photo'), async (ctx) => {
         });
     } catch (error) {
         console.error('Error processing image:', error);
-        if (isGeminiOverloadError(error)) {
+        if (isRetryableGeminiError(error)) {
             await ctx.reply(
                 '⏳ The AI service is busy right now. Please try sending the image again in a moment.'
             );
@@ -599,7 +607,13 @@ bot.on(message('voice'), async (ctx) => {
         });
     } catch (error) {
         console.error('Error processing voice:', error);
-        await ctx.reply("Sorry, I couldn't hear that clearly.");
+        if (isRetryableGeminiError(error)) {
+            await ctx.reply(
+                '⏳ Gemini is overloaded right now. Please try sending the voice message again in a bit.'
+            );
+        } else {
+            await ctx.reply("Sorry, I couldn't hear that clearly.");
+        }
     }
 });
 
@@ -626,7 +640,7 @@ bot.on(message('document'), async (ctx) => {
                 replyCtx.promptHint +
                 '\n' +
                 documentExpensePrompt;
-            const chat = createDomainModel(genAI, 'expense', { heavy: true }).startChat();
+            const chat = startChatWithRetry(createDomainModel(genAI, 'expense', { heavy: true }));
             try {
                 await runChatTurn(
                     chat,
@@ -639,8 +653,8 @@ bot.on(message('document'), async (ctx) => {
                     }
                 );
             } catch (error) {
-                if (isGeminiOverloadError(error)) {
-                    const fallbackChat = createDomainModel(genAI, 'expense').startChat();
+                if (isRetryableGeminiError(error)) {
+                    const fallbackChat = startChatWithRetry(createDomainModel(genAI, 'expense'));
                     await runChatTurn(
                         fallbackChat,
                         ctx,
@@ -666,7 +680,13 @@ bot.on(message('document'), async (ctx) => {
         });
     } catch (error) {
         console.error('Error processing document:', error);
-        await ctx.reply('Sorry, I had trouble reading that file.');
+        if (isRetryableGeminiError(error)) {
+            await ctx.reply(
+                '⏳ Gemini is overloaded right now (tried both models and it\'s still down). Please try again in a bit.'
+            );
+        } else {
+            await ctx.reply('Sorry, I had trouble reading that file.');
+        }
     }
 });
 

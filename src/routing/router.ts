@@ -1,5 +1,10 @@
 import { GoogleGenerativeAI, ChatSession } from '@google/generative-ai';
-import { createDomainModel } from '../config/gemini';
+import {
+    createDomainModel,
+    createPlannerModel,
+    startChatWithRetry,
+    isRetryableGeminiError,
+} from '../config/gemini';
 import { RouteDomain, SpecialistDomain } from '../config/prompts';
 
 const VALID_DOMAINS: RouteDomain[] = ['expense', 'financeConfig', 'meal', 'calendar', 'workout', 'chat'];
@@ -95,7 +100,10 @@ export function routeByHeuristics(text: string, hasMedia: boolean): RouteDomain[
 
     let next = applyMoneyRoutingHints(text, domains);
     if (filterSpecialistDomains(next).length === 0 && hasMedia) {
-        next = ['expense'];
+        // Bare photo, no caption signal: could be a receipt or a plate of food—
+        // let both specialists look. Meal ignores non-food images; expense ignores
+        // images with no visible price.
+        next = ['expense', 'meal'];
     }
     if (next.length === 0) next = ['chat'];
 
@@ -107,16 +115,22 @@ export async function routeMessage(
     prompt: string | (string | Record<string, unknown>)[],
     options: RouteOptions
 ): Promise<RouteDomain[]> {
-    const { session, plannerModel } = options;
+    const { session, plannerModel, genAI } = options;
 
     if (session?.awaitingInput && session.activeDomain) {
         return [session.activeDomain];
     }
 
-    const chat = plannerModel.startChat();
-    const result = await chat.sendMessage(
-        prompt as Parameters<ChatSession['sendMessage']>[0]
-    );
+    let result;
+    try {
+        const chat = startChatWithRetry(plannerModel);
+        result = await chat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
+    } catch (error) {
+        if (!isRetryableGeminiError(error)) throw error;
+        console.log('🧭 Planner (lite) overloaded — retrying with heavy model');
+        const heavyChat = startChatWithRetry(createPlannerModel(genAI, { heavy: true }), 0);
+        result = await heavyChat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
+    }
     const functionCalls = result.response.functionCalls();
 
     if (functionCalls?.length) {
@@ -141,9 +155,9 @@ export function getOrCreateDomainChat(
     if (existing) return existing;
 
     const model = createDomainModel(options.genAI, domain, {
-        heavy: options.heavy && domain === 'expense',
+        heavy: options.heavy,
     });
-    const chat = model.startChat();
+    const chat = startChatWithRetry(model);
     state.chats[domain] = chat;
     return chat;
 }

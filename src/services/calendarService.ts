@@ -3,6 +3,7 @@ import { googleAuth } from './googleClient';
 
 const calendar = google.calendar({ version: 'v3', auth: googleAuth });
 const TIMEZONE = 'Asia/Kuala_Lumpur';
+const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || 'primary';
 
 export type CalendarEventSummary = {
     id: string;
@@ -50,7 +51,7 @@ export async function createCalendarEvent(
         };
 
         const response = await calendar.events.insert({
-            calendarId: 'primary',
+            calendarId: CALENDAR_ID,
             requestBody: event,
         });
 
@@ -85,7 +86,7 @@ export async function getSchedule(dateString: string) {
     try {
         const { timeMin, timeMax } = dayBounds(dateString);
         const response = await calendar.events.list({
-            calendarId: 'primary',
+            calendarId: CALENDAR_ID,
             timeMin,
             timeMax,
             singleEvents: true,
@@ -132,7 +133,7 @@ export async function rescheduleCalendarEvent(
 ) {
     try {
         const existing = await calendar.events.get({
-            calendarId: 'primary',
+            calendarId: CALENDAR_ID,
             eventId,
         });
 
@@ -149,7 +150,7 @@ export async function rescheduleCalendarEvent(
         }
 
         const response = await calendar.events.patch({
-            calendarId: 'primary',
+            calendarId: CALENDAR_ID,
             eventId,
             requestBody: {
                 ...(newTitle ? { summary: newTitle } : {}),
@@ -174,7 +175,7 @@ export async function rescheduleCalendarEvent(
 export async function cancelCalendarEvent(eventId: string) {
     try {
         await calendar.events.delete({
-            calendarId: 'primary',
+            calendarId: CALENDAR_ID,
             eventId,
         });
     } catch (error: any) {
