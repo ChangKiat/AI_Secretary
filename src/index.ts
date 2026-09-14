@@ -39,6 +39,7 @@ import {
     getOrCreateDomainChat,
     filterSpecialistDomains,
     applyMoneyRoutingHints,
+    hasMoneySignal,
     UserChatState,
     SpecialistDomain,
 } from './routing/router';
@@ -376,6 +377,14 @@ async function runChatTurn(
         return awaiting ? 'awaiting_input' : 'complete';
     }
 
+    // This domain was fired speculatively alongside another specialist on a bare
+    // photo (no price/payment text). If it found nothing to log, staying silent
+    // is correct — the other specialist already handled it, and asking "was this
+    // purchased?" on every plain meal photo would be noise.
+    if (toolOptions?.suppressNoOpReply) {
+        return 'complete';
+    }
+
     const aiText = response.text();
     if (aiText && aiText.trim().length > 0) {
         await ctx.reply(aiText);
@@ -492,10 +501,24 @@ async function routeAndExecute(
     let anyAwaiting = false;
     let awaitDomain: SpecialistDomain | undefined;
 
+    // A bare photo with no price/payment text is ambiguous—could be a receipt or
+    // just a plate of food—so both specialists run. If expense finds no price to
+    // log, it should stay quiet rather than ask "was this purchased?" on every
+    // meal photo; meal already owns that case.
+    const suppressExpenseNoOp =
+        mediaParts.length > 0 &&
+        specialists.includes('expense') &&
+        specialists.includes('meal') &&
+        !hasMoneySignal(textForContext);
+
     for (const domain of specialists) {
         const specialistParts =
             mediaParts.length > 0 ? [...mediaParts, contextPrompt] : contextPrompt;
         const heavy = options?.heavy && domain === 'expense';
+        const domainToolOptions =
+            domain === 'expense' && suppressExpenseNoOp
+                ? { ...mergedToolOptions, suppressNoOpReply: true }
+                : mergedToolOptions;
         try {
             const status = await runDomainTurn(
                 domain,
@@ -503,7 +526,7 @@ async function routeAndExecute(
                 specialistParts,
                 userId,
                 session,
-                mergedToolOptions,
+                domainToolOptions,
                 heavy
             );
             if (status === 'awaiting_input') {
@@ -522,7 +545,7 @@ async function routeAndExecute(
                 specialistParts,
                 userId,
                 session,
-                mergedToolOptions,
+                domainToolOptions,
                 !heavy
             );
             if (status === 'awaiting_input') {

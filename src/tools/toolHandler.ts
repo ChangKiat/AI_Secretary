@@ -90,6 +90,7 @@ export interface ToolCallOptions {
     mealBatchCollector?: MealBatchEntry[];
     suppressExpenseReply?: boolean;
     expenseBatchCollector?: ExpenseBatchEntry[];
+    suppressNoOpReply?: boolean;
     replyToExpenseId?: number;
     replyTarget?: ReplyRecordTarget;
 }

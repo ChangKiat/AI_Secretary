@@ -59,6 +59,11 @@ const TIME_EXPR_SIGNAL =
 const FINANCE_CONFIG_SIGNAL =
     /\b(fixed (?:expense|bill)|recurring (?:bill|expense|payment|interest)|quarterly bill|yearly bill|interest schedule|automate interest|schedule.*interest|budgets?)\b/i;
 
+/** Whether the text itself names a price or payment method (vs. relying on an image to supply one). */
+export function hasMoneySignal(text: string): boolean {
+    return PRICE_SIGNAL.test(text) || PAYMENT_SIGNAL.test(text);
+}
+
 /** If text has price/payment, drop chat and ensure expense is included (unless financeConfig already owns it — setup, not a logged transaction). */
 export function applyMoneyRoutingHints(text: string, domains: RouteDomain[]): RouteDomain[] {
     if (domains.includes('financeConfig')) return domains;
