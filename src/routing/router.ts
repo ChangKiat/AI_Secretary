@@ -42,9 +42,10 @@ const PAYMENT_SIGNAL =
 
 // Words that only signal food when no specific dish/nutrition term is present —
 // "dinner"/"eat" alone is ambiguous with a social plan (see SCHEDULE_SIGNAL below).
-const GENERIC_MEAL_SIGNAL = /\b(eat|ate|eaten|lunch|dinner|breakfast|supper|snack|had)\b/i;
+// Note: trailing "s?" lets these match plurals too ("meal" must also match "meals").
+const GENERIC_MEAL_SIGNAL = /\b(eat|eats|ate|eaten|lunch|dinner|breakfast|supper|snacks?|had)\b/i;
 const SPECIFIC_FOOD_SIGNAL =
-    /\b(food|meal|protein|calorie|macro|nutrition|nasi|roti|kopi|chicken\s*rice|rice|soup|noodle|ramen|burger|pizza|salad)\b/i;
+    /\b(foods?|meals?|proteins?|calories?|macros?|nutrition|nasi|roti|kopi|chicken\s*rice|rice|soups?|noodles?|ramen|burgers?|pizzas?|salads?|smoothies?|drinks?|juices?|coffee|tea|shakes?|milkshakes?|latte|boba)\b/i;
 const BODY_WEIGHT_SIGNAL = /\b(weigh[- ]?in|weight)\b/i;
 const WORKOUT_SIGNAL =
     /\b(gym|workout|exercise|training|bench|squat|deadlift|press|reps?|sets?|\d+\s*[x×]\s*\d+|cardio|run|jog)\b/i;
