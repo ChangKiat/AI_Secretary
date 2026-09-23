@@ -50,4 +50,15 @@ assert(
     'photo + payment-only caption should also include meal (caption alone cannot rule out food)'
 );
 
+const mixedWorkoutSupplementExpense = routeByHeuristics(
+    'squat 15\nDeadlift 5\n\nOne scope myprotein\nLalaport buy waffle kayapandan butter tng rm7',
+    false
+);
+for (const d of ['expense', 'meal', 'workout'] as const) {
+    assert(
+        mixedWorkoutSupplementExpense.includes(d),
+        `workout + protein scoop + paid waffle should include ${d}`
+    );
+}
+
 console.log('money_routing_check: ok');

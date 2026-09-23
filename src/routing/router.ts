@@ -45,7 +45,7 @@ const PAYMENT_SIGNAL =
 // Note: trailing "s?" lets these match plurals too ("meal" must also match "meals").
 const GENERIC_MEAL_SIGNAL = /\b(eat|eats|ate|eaten|lunch|dinner|breakfast|supper|snacks?|had)\b/i;
 const SPECIFIC_FOOD_SIGNAL =
-    /\b(foods?|meals?|proteins?|calories?|macros?|nutrition|nasi|roti|kopi|chicken\s*rice|rice|soups?|noodles?|ramen|burgers?|pizzas?|salads?|smoothies?|drinks?|juices?|coffee|tea|shakes?|milkshakes?|latte|boba)\b/i;
+    /\b(foods?|meals?|proteins?|calories?|macros?|nutrition|nasi|roti|kopi|chicken\s*rice|rice|soups?|noodles?|ramen|burgers?|pizzas?|salads?|smoothies?|drinks?|juices?|coffee|tea|shakes?|milkshakes?|latte|boba|waffles?|bread|cakes?|whey|scoops?)\b|myprotein/i;
 const BODY_WEIGHT_SIGNAL = /\b(weigh[- ]?in|weight)\b/i;
 const WORKOUT_SIGNAL =
     /\b(gym|workout|exercise|training|bench|squat|deadlift|press|reps?|sets?|\d+\s*[x×]\s*\d+|cardio|run|jog)\b/i;

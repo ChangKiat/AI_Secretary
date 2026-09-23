@@ -15,6 +15,8 @@ export interface WorkoutLogEntry {
     /** Same value within a session pairs exercises as a superset. */
     supersetGroup?: number | null;
     burn?: { caloriesBurned: number; fatBurnG: number } | null;
+    /** DB row id once inserted. */
+    workoutId?: number;
 }
 
 export interface WorkoutExerciseRecord {
@@ -212,11 +214,13 @@ export function formatWorkoutLogReply(
         durationMin?: number;
         notes?: string;
         burn?: { caloriesBurned: number; fatBurnG: number } | null;
-    }
+        workoutId?: number;
+    },
+    heading = '✅ Logged'
 ): string {
     const detail = formatWorkoutDetail(opts);
 
-    const lines = ['✅ Logged', `📅 Date: ${date}`, `💪 Exercise: ${exercise}`];
+    const lines = [heading, `📅 Date: ${date}`, `💪 Exercise: ${exercise}`];
     if (detail) lines.push(`📊 Details: ${detail}`);
     if (opts.burn) {
         lines.push(
@@ -226,6 +230,7 @@ export function formatWorkoutLogReply(
         lines.push('💡 Tip: Set your body weight (e.g. "I weigh 70kg") for burn estimates.');
     }
     if (opts.notes) lines.push(`📝 Notes: ${opts.notes}`);
+    if (opts.workoutId) lines.push(`#️⃣ Workout ID: ${opts.workoutId}`);
     return lines.join('\n');
 }
 
@@ -233,9 +238,11 @@ export function formatWorkoutLogReply(
 export function formatBulkWorkoutLogReply(
     date: string,
     entries: WorkoutLogEntry[],
-    sessionLabel?: string
+    sessionLabel?: string,
+    workoutId?: number,
+    heading = '✅ Logged'
 ): string {
-    const lines = ['✅ Logged', `📅 Date: ${date}`];
+    const lines = [heading, `📅 Date: ${date}`];
     if (sessionLabel) lines.push(`📋 Session: ${sessionLabel}`);
     lines.push('');
 
@@ -281,6 +288,8 @@ export function formatBulkWorkoutLogReply(
     } else {
         lines.push('💡 Tip: Set your body weight (e.g. "I weigh 70kg") for burn estimates.');
     }
+    // Reply-to-edit hook: parseReplyRecordFromBotReply reads this id back.
+    if (workoutId) lines.push(`#️⃣ Workout ID: ${workoutId}`);
     return lines.join('\n');
 }
 
@@ -299,7 +308,7 @@ export async function logWorkout(
     sessionLabel?: string | null,
     weightsKgText?: string | null,
     supersetGroup?: number | null
-) {
+): Promise<number> {
     const db = requireDb();
     const row = {
         telegramUserId,
@@ -317,7 +326,8 @@ export async function logWorkout(
         sessionLabel: sessionLabel ?? null,
         supersetGroup: supersetGroup ?? null,
     };
-    await db.insert(workouts).values(row);
+    const [inserted] = await db.insert(workouts).values(row).returning({ id: workouts.id });
+    return inserted.id;
 }
 
 export async function logBulkWorkouts(
@@ -337,9 +347,9 @@ export async function logBulkWorkouts(
     }[],
     sessionId?: string | null,
     sessionLabel?: string | null
-) {
+): Promise<number[]> {
     const db = requireDb();
-    await db.insert(workouts).values(
+    const inserted = await db.insert(workouts).values(
         workoutList.map((w) => ({
             telegramUserId,
             date: w.date,
@@ -356,7 +366,40 @@ export async function logBulkWorkouts(
             sessionLabel: sessionLabel ?? null,
             supersetGroup: w.supersetGroup ?? null,
         }))
-    );
+    ).returning({ id: workouts.id });
+    return inserted.map((r) => r.id);
+}
+
+export async function getWorkoutById(
+    id: number,
+    telegramUserId: number
+): Promise<WorkoutExerciseRecord | null> {
+    const db = requireDb();
+    const rows = await db
+        .select()
+        .from(workouts)
+        .where(and(eq(workouts.id, id), eq(workouts.telegramUserId, telegramUserId)))
+        .limit(1);
+    return rows[0] ? mapRowToExercise(rows[0]) : null;
+}
+
+/** The whole session a logged row belongs to (just that row when it has no session). */
+export async function getWorkoutSessionRows(
+    id: number,
+    telegramUserId: number
+): Promise<WorkoutExerciseRecord[]> {
+    const row = await getWorkoutById(id, telegramUserId);
+    if (!row) return [];
+    if (!row.sessionId) return [row];
+    const db = requireDb();
+    const rows = await db
+        .select()
+        .from(workouts)
+        .where(
+            and(eq(workouts.sessionId, row.sessionId), eq(workouts.telegramUserId, telegramUserId))
+        )
+        .orderBy(workouts.id);
+    return rows.map(mapRowToExercise);
 }
 
 export async function getWorkoutHistory(

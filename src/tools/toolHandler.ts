@@ -55,6 +55,10 @@ import {
     normalizeWeightsKg,
     normalizeSuggestHorizon,
     daysBackForHorizon,
+    getWorkoutSessionRows,
+    updateWorkout,
+    deleteWorkout,
+    deleteWorkoutsBySessionId,
     WorkoutLogEntry,
 } from '../services/gymService';
 import { estimateBurn, burnFromReportedCalories } from '../services/burnCalculator';
@@ -119,11 +123,16 @@ function todayISO(): string {
 const RECEIPT_CAPTION_KEYWORDS =
     /\b(receipt|bill|invoice|statement|expense|transaction|bank|credit card)\b/i;
 
+const OTHER_DAY_CAPTION =
+    /\b(yesterday|ytd|ytdy|last\s+night|tomorrow|tmr|tmrw|\d{4}-\d{2}-\d{2})\b/i;
+
 function resolveLogDate(argsDate: string | undefined, options?: ToolCallOptions): string {
     const today = todayISO();
     const caption = options?.userCaption ?? '';
 
-    if (/\btoday\b/i.test(caption)) {
+    // A caption that mixes days ("Yesterday workout … Today lunch …") must keep the
+    // model's per-item date; the blanket "today" override is only for single-day captions.
+    if (/\btoday\b/i.test(caption) && !OTHER_DAY_CAPTION.test(caption)) {
         return today;
     }
     if (!argsDate) {
@@ -155,6 +164,29 @@ interface WorkoutArgs {
     notes?: string;
     supersetGroup?: number;
 }
+
+interface WorkoutEditArgs {
+    id?: number;
+    date?: string;
+    exercise?: string;
+    sets?: number;
+    reps?: number;
+    weightKg?: number;
+    weightsKg?: number[];
+    durationMin?: number;
+    notes?: string;
+}
+
+/** Fields that change the edited exercise itself (date alone just moves the session). */
+const WORKOUT_EDIT_FIELDS = [
+    'exercise',
+    'sets',
+    'reps',
+    'weightKg',
+    'weightsKg',
+    'durationMin',
+    'notes',
+] as const satisfies readonly (keyof WorkoutEditArgs)[];
 
 async function buildWorkoutEntry(
     args: WorkoutArgs,
@@ -197,7 +229,7 @@ async function processWorkoutLog(
     sessionLabel?: string | null
 ): Promise<WorkoutLogEntry> {
     const entry = await buildWorkoutEntry(args, date, bodyWeightKg);
-    await logWorkout(
+    entry.workoutId = await logWorkout(
         userId,
         date,
         args.exercise,
@@ -239,6 +271,9 @@ const KNOWN_TOOL_NAMES = new Set([
     'log_bulk_expenses',
     'log_workout',
     'log_bulk_workouts',
+    'edit_workout',
+    'delete_workout',
+    'log_body_weight',
     'get_workout_summary',
     'get_workout_history',
     'suggest_workout',
@@ -251,6 +286,23 @@ const KNOWN_TOOL_NAMES = new Set([
     'upsert_budget',
     'get_budgets',
     'update_user_settings',
+]);
+
+/** Handlers that relay the model's follow-up text to the user, so their functionResponse can't be deferred. */
+export const TOOLS_READING_MODEL_REPLY = new Set([
+    'get_spending_summary',
+    'get_all_fixed_expenses',
+    'create_calendar_event',
+    'check_schedule',
+    'reschedule_calendar_event',
+    'cancel_calendar_event',
+    'get_workout_summary',
+    'get_workout_history',
+    'suggest_workout',
+    'get_meal_history',
+    'get_nutrition_summary',
+    'suggest_meal',
+    'get_budgets',
 ]);
 
 /** Gemini sometimes invents PascalCase / duplicated names (e.g. LogBulkExpensesExpenses). */
@@ -1091,6 +1143,7 @@ export async function handleToolCall(
                     durationMin: args.durationMin,
                     notes: args.notes,
                     burn: entry.burn ?? null,
+                    workoutId: entry.workoutId,
                 })
             );
         }
@@ -1116,7 +1169,7 @@ export async function handleToolCall(
             entries.push(await buildWorkoutEntry(withDefaults, wDate, settings.bodyWeightKg));
         }
 
-        await logBulkWorkouts(
+        const workoutIds = await logBulkWorkouts(
             userId,
             entries.map((entry) => ({
                 date: entry.date,
@@ -1158,7 +1211,96 @@ export async function handleToolCall(
                 },
             },
         ]);
-        await ctx.reply(formatBulkWorkoutLogReply(date, entries, sessionLabel));
+        await ctx.reply(formatBulkWorkoutLogReply(date, entries, sessionLabel, workoutIds[0]));
+        return 'complete';
+    } else if (call.name === 'edit_workout' || call.name === 'delete_workout') {
+        const args = call.args as WorkoutEditArgs & { wholeSession?: boolean };
+        const respond = (response: object) =>
+            chat.sendMessage([{ functionResponse: { name: call.name, response } }]);
+        const workoutId = resolveToolRecordId(args.id, options, 'workout');
+        const sessionRows = workoutId != null ? await getWorkoutSessionRows(workoutId, userId) : [];
+        const target = sessionRows.find((r) => r.id === workoutId);
+        if (!target) {
+            await respond({ status: 'not_found' });
+            await ctx.reply('⚠️ Reply to a workout confirmation (it shows a Workout ID) to edit or delete it.');
+            return 'complete';
+        }
+
+        if (call.name === 'delete_workout') {
+            const removed =
+                args.wholeSession && target.sessionId
+                    ? await deleteWorkoutsBySessionId(target.sessionId, userId)
+                    : Number(await deleteWorkout(target.id, userId));
+            await respond({ status: 'success', removed });
+            await ctx.reply(`🗑️ Deleted ${removed} exercise${removed === 1 ? '' : 's'} (${target.date}).`);
+            return 'complete';
+        }
+
+        const settings = await getNutritionTargets(userId);
+        const newDate = args.date ?? target.date;
+        const touchesTarget = WORKOUT_EDIT_FIELDS.some((k) => args[k] !== undefined);
+        const updatedEntries: WorkoutLogEntry[] = [];
+        for (const row of sessionRows) {
+            // Rebuild through buildWorkoutEntry so progressive weights and burn stay consistent.
+            const edited = row.id === target.id && touchesTarget;
+            const entry = await buildWorkoutEntry(
+                {
+                    exercise: (edited && args.exercise) || row.exercise,
+                    sets: edited && args.sets !== undefined ? args.sets : row.sets ?? undefined,
+                    reps: edited && args.reps !== undefined ? args.reps : row.reps ?? undefined,
+                    weightKg:
+                        edited && args.weightKg !== undefined ? args.weightKg : row.weightKg ?? undefined,
+                    weightsKg:
+                        edited && (args.weightsKg !== undefined || args.weightKg !== undefined)
+                            ? args.weightsKg
+                            : row.weightsKgText?.split('/').map(Number),
+                    durationMin:
+                        edited && args.durationMin !== undefined
+                            ? args.durationMin
+                            : row.durationMin ?? undefined,
+                    notes: edited && args.notes !== undefined ? args.notes : row.notes ?? undefined,
+                    supersetGroup: row.supersetGroup ?? undefined,
+                    // Keep machine-reported burn unless the edit changes the work done.
+                    caloriesBurned: edited ? undefined : row.caloriesBurned ?? undefined,
+                },
+                newDate,
+                settings.bodyWeightKg
+            );
+            entry.workoutId = row.id;
+            if (edited || newDate !== row.date) {
+                await updateWorkout(row.id, userId, {
+                    date: newDate,
+                    exercise: entry.exercise,
+                    sets: entry.sets ?? null,
+                    reps: entry.reps ?? null,
+                    weightKg: entry.weightKg ?? null,
+                    weightsKgText: entry.weightsKgText ?? null,
+                    durationMin: entry.durationMin ?? null,
+                    notes: entry.notes ?? null,
+                    caloriesBurned: entry.burn?.caloriesBurned ?? null,
+                    fatBurnG: entry.burn?.fatBurnG ?? null,
+                });
+            }
+            updatedEntries.push(entry);
+        }
+
+        await respond({ status: 'success', date: newDate, count: updatedEntries.length });
+        await ctx.reply(
+            updatedEntries.length > 1
+                ? formatBulkWorkoutLogReply(
+                      newDate,
+                      updatedEntries,
+                      target.sessionLabel ?? undefined,
+                      sessionRows[0].id,
+                      '✅ Updated'
+                  )
+                : formatWorkoutLogReply(
+                      newDate,
+                      updatedEntries[0].exercise,
+                      { ...updatedEntries[0], workoutId: target.id },
+                      '✅ Updated'
+                  )
+        );
         return 'complete';
     } else if (call.name === 'get_workout_summary') {
         const args = call.args as { startDate: string; endDate: string };

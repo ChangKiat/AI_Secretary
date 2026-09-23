@@ -1,7 +1,7 @@
 import { Telegraf } from 'telegraf';
 import { randomUUID } from 'crypto';
 import { message } from 'telegraf/filters';
-import { GoogleGenerativeAI, GenerativeModel, ChatSession } from '@google/generative-ai';
+import { GoogleGenerativeAI, GenerativeModel, ChatSession, Part } from '@google/generative-ai';
 import 'dotenv/config';
 import { appendExpense, getFixedExpensesForToday, formatBulkExpenseLogReply } from './services/expenseService';
 import { upsertInvestmentFundingTransfer, resolveReplyRecord } from './services/incomeService';
@@ -10,8 +10,9 @@ import {
     getInterestSchedulesForToday,
 } from './services/interestScheduleService';
 import { applyLoanPayment } from './services/loanService';
-import { handleToolCall } from './tools/toolHandler';
-import { formatBulkWorkoutLogReply } from './services/gymService';
+import { handleToolCall, resolveToolName, TOOLS_READING_MODEL_REPLY } from './tools/toolHandler';
+import { getDomainDeclarations } from './tools/tools';
+import { formatBulkWorkoutLogReply, getWorkoutSessionRows } from './services/gymService';
 import {
     createPlannerModel,
     createDomainModel,
@@ -255,6 +256,18 @@ main().catch((err) => {
     process.exit(1);
 });
 
+const REPLY_TARGET_DOMAIN: Record<
+    import('./services/incomeService').ReplyRecordType,
+    SpecialistDomain
+> = { expense: 'expense', income: 'expense', meal: 'meal', workout: 'workout' };
+
+/** YYYY-MM-DD in Malaysia time, `offsetDays` from today. */
+function klIsoDate(offsetDays = 0): string {
+    return new Date(Date.now() + offsetDays * 86_400_000).toLocaleDateString('en-CA', {
+        timeZone: 'Asia/Kuala_Lumpur',
+    });
+}
+
 function buildContextPrompt(userMessage: string): string {
     const now = new Date();
     const todayFormatted = now.toLocaleDateString('en-MY', {
@@ -266,10 +279,11 @@ function buildContextPrompt(userMessage: string): string {
     });
     return `
         [SYSTEM CONTEXT]
-        Today is ${todayFormatted}.
+        Today is ${todayFormatted} (${klIsoDate()}). Yesterday was ${klIsoDate(-1)}.
         Current Year: ${now.getFullYear()}.
         Current Month: ${now.getMonth() + 1}.
         Reference: If the user provides a date range like "24-26", calculate the start and end dates accordingly.
+        MIXED DAYS: A message may have sections for different days ("Yesterday workout … Today lunch …"). Each section's day applies only to the items under it—pass that exact date on every log call; never default a "yesterday" item to today.
         ACTION: Use the appropriate tool for finances, calendar, gym, or nutrition. DO NOT JUST CHAT when an action is requested.
 
         [MESSAGE]: ${userMessage}`;
@@ -291,13 +305,27 @@ async function buildReplyRecordContext(ctx: import('telegraf').Context): Promise
     const replyText = getReplyToText(ctx);
     if (!replyText) return { promptHint: '' };
     const userId = ctx.from?.id;
-    const target = await resolveReplyRecord(replyText, async (mealId) => {
+    let workoutSession: Awaited<ReturnType<typeof getWorkoutSessionRows>> = [];
+    const target = await resolveReplyRecord(replyText, async (t) => {
         if (userId == null) return false;
-        return (await getMealById(mealId, userId)) != null;
+        if (t.type === 'workout') {
+            workoutSession = await getWorkoutSessionRows(t.id, userId);
+            return workoutSession.length > 0;
+        }
+        return (await getMealById(t.id, userId)) != null;
     });
     if (!target) return { promptHint: '' };
 
-    const editHint = `For corrections use edit_${target.type}/delete_${target.type} with this id.`;
+    let editHint = `For corrections use edit_${target.type}/delete_${target.type} with this id.`;
+    if (target.type === 'workout') {
+        const rows = workoutSession
+            .map((r) => `#${r.id} ${r.exercise}${r.weightsKgText ? ` ${r.weightsKgText}kg` : r.weightKg ? ` ${r.weightKg}kg` : ''}`)
+            .join('; ');
+        editHint =
+            `That session (${workoutSession[0].date}) has: ${rows}. ` +
+            'Use edit_workout with the matching exercise id; a date change on any id moves the whole session—call it once. ' +
+            'Use delete_workout (wholeSession for the entire session). Do NOT log_workout again.';
+    }
     const expenseExtra =
         target.type === 'expense'
             ? ' If they report a reimbursement, use log_income linked to this expense.'
@@ -314,17 +342,51 @@ async function runChatTurn(
     ctx: import('telegraf').Context,
     prompt: string | (string | Record<string, unknown>)[],
     userId: number,
-    toolOptions?: import('./tools/toolHandler').ToolCallOptions
+    toolOptions?: import('./tools/toolHandler').ToolCallOptions,
+    allowedTools?: Set<string>
 ): Promise<'complete' | 'awaiting_input'> {
     const result = await chat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
     const response = result.response;
-    const functionCalls = response.functionCalls();
+    const rawCalls = response.functionCalls();
     console.log(
         '🤖 AI Intent:',
-        functionCalls ? `Calling Tool: ${functionCalls[0].name}` : 'Just Chatting'
+        rawCalls ? `Calling Tools: ${rawCalls.map((c) => c.name).join(', ')}` : 'Just Chatting'
     );
 
-    if (functionCalls && functionCalls.length > 0) {
+    if (rawCalls && rawCalls.length > 0) {
+        // Gemini expects ONE follow-up turn carrying a functionResponse for every call.
+        // Handlers each send their own, which breaks the 2nd+ call of a multi-call turn
+        // (400 → "Sorry, I encountered an error"). Buffer them and send once at the end,
+        // unless a handler needs the model's follow-up text to answer the user.
+        // ponytail: a multi-call turn that includes a reply-reading tool still sends
+        // per call; upgrade path = handlers return their response instead of sending it.
+        const pendingResponses: Part[] = [];
+        const deferResponses =
+            rawCalls.length > 1 &&
+            !rawCalls.some((c) => TOOLS_READING_MODEL_REPLY.has(resolveToolName(c.name)));
+        const turnChat: ChatSession = Object.assign(Object.create(chat), {
+            sendMessage: async (parts: Part[]) => {
+                pendingResponses.push(...parts);
+                if (deferResponses) return { response: { text: (): string => '' } };
+                return chat.sendMessage(pendingResponses.splice(0));
+            },
+        });
+
+        // A specialist sees the whole message, so it sometimes calls tools it wasn't
+        // given (workout specialist → log_expense on "tng rm7", expense → log_supplement).
+        // The owning specialist already handles those; running them here double-logs.
+        const functionCalls = rawCalls.filter((call) => {
+            if (!allowedTools || allowedTools.has(resolveToolName(call.name))) return true;
+            console.log(`🚫 Ignored out-of-domain tool call: ${call.name}`);
+            pendingResponses.push({
+                functionResponse: {
+                    name: call.name,
+                    response: { status: 'ignored', reason: 'not available to this specialist' },
+                },
+            });
+            return false;
+        });
+
         let awaiting = false;
         const workoutCallCount = functionCalls.filter((c) => c.name === 'log_workout').length;
         const mealCallCount = functionCalls.filter((c) => c.name === 'log_meal').length;
@@ -352,15 +414,26 @@ async function runChatTurn(
                 callOptions.suppressExpenseReply = true;
                 callOptions.expenseBatchCollector = expenseBatchCollector;
             }
-            const toolResult = await handleToolCall(call, chat, ctx, callOptions);
+            const toolResult = await handleToolCall(call, turnChat, ctx, callOptions);
             if (toolResult === 'awaiting_input') {
                 awaiting = true;
             }
         }
+        if (pendingResponses.length > 0) {
+            // History bookkeeping only — every log above already replied to the user.
+            await chat.sendMessage(pendingResponses).catch((err) => {
+                console.warn('Deferred functionResponse send failed:', err);
+            });
+        }
 
         if (workoutBatchCollector.length > 1) {
             await ctx.reply(
-                formatBulkWorkoutLogReply(workoutBatchCollector[0].date, workoutBatchCollector)
+                formatBulkWorkoutLogReply(
+                    workoutBatchCollector[0].date,
+                    workoutBatchCollector,
+                    undefined,
+                    workoutBatchCollector[0].workoutId
+                )
             );
         }
         if (mealBatchCollector.length > 1) {
@@ -411,7 +484,8 @@ async function runDomainTurn(
         userId,
         heavy,
     });
-    return runChatTurn(chat, ctx, parts, userId, toolOptions);
+    const allowedTools = new Set(getDomainDeclarations(domain).map((d) => d.name));
+    return runChatTurn(chat, ctx, parts, userId, toolOptions, allowedTools);
 }
 
 async function handleChatOnly(ctx: import('telegraf').Context, contextPrompt: string) {
@@ -460,6 +534,11 @@ async function routeAndExecute(
     let domains: import('./routing/router').RouteDomain[];
     if (options?.forceDomains) {
         domains = options.forceDomains;
+    } else if (replyCtx.replyTarget) {
+        // Replying to a confirmation ("edit date to yesterday") carries no keywords
+        // for the router—the record type alone says who owns the correction.
+        domains = [REPLY_TARGET_DOMAIN[replyCtx.replyTarget.type]];
+        console.log(`🧭 Reply to ${replyCtx.replyTarget.type} #${replyCtx.replyTarget.id} →`, domains[0]);
     } else if (session.awaitingInput && session.activeDomain) {
         domains = [session.activeDomain];
     } else if (SKIP_PLANNER) {

@@ -139,7 +139,7 @@ export async function findRecentExpenseByDescription(keyword: string): Promise<n
     return matches[0]?.id ?? null;
 }
 
-export type ReplyRecordType = 'expense' | 'income' | 'meal';
+export type ReplyRecordType = 'expense' | 'income' | 'meal' | 'workout';
 
 export interface ReplyRecordTarget {
     type: ReplyRecordType;
@@ -148,6 +148,11 @@ export interface ReplyRecordTarget {
 
 /** Parse confirmation text shape; order matters so income ≠ expense. */
 export function parseReplyRecordFromBotReply(text: string): ReplyRecordTarget | null {
+    const workoutMatch = text.match(/Workout ID:\s*(\d+)/);
+    if (workoutMatch) {
+        const id = parseInt(workoutMatch[1], 10);
+        return id > 0 ? { type: 'workout', id } : null;
+    }
     const incomeMatch = text.match(/(?:Logged|Updated) income #(\d+)/i);
     if (incomeMatch) {
         const id = parseInt(incomeMatch[1], 10);
@@ -212,7 +217,8 @@ export async function resolveReplyToExpenseId(text: string): Promise<number | un
 
 export async function resolveReplyRecord(
     text: string,
-    mealExists?: (id: number) => Promise<boolean>
+    /** Per-user ownership check for meal/workout rows (expense/income are checked here). */
+    userRecordExists?: (target: ReplyRecordTarget) => Promise<boolean>
 ): Promise<ReplyRecordTarget | undefined> {
     const parsed = parseReplyRecordFromBotReply(text);
     if (!parsed) return undefined;
@@ -222,7 +228,7 @@ export async function resolveReplyRecord(
     if (parsed.type === 'income') {
         return (await incomeExists(parsed.id)) ? parsed : undefined;
     }
-    if (mealExists && !(await mealExists(parsed.id))) return undefined;
+    if (userRecordExists && !(await userRecordExists(parsed))) return undefined;
     return parsed;
 }
 
@@ -614,6 +620,12 @@ if (require.main === module) {
     const updatedIncome = parseReplyRecordFromBotReply('✅ Updated income #42\n📅 Date: 2026-06-29');
     if (updatedIncome?.type !== 'income' || updatedIncome.id !== 42) {
         throw new Error(`expected updated income #42, got ${JSON.stringify(updatedIncome)}`);
+    }
+    const workoutTarget = parseReplyRecordFromBotReply(
+        '✅ Logged\n📅 Date: 2026-09-23\n\n• ISO incline press — 4 sets @ 15/20/20/20kg\n\n#️⃣ Workout ID: 812'
+    );
+    if (workoutTarget?.type !== 'workout' || workoutTarget.id !== 812) {
+        throw new Error(`expected workout #812, got ${JSON.stringify(workoutTarget)}`);
     }
 
     console.log('incomeService self-check ok');

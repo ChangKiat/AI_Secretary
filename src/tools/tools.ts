@@ -695,6 +695,46 @@ export const deleteMealDeclaration: FunctionDeclaration = {
     },
 };
 
+export const editWorkoutDeclaration: FunctionDeclaration = {
+    name: 'edit_workout',
+    description:
+        'Corrects a logged exercise by id (from REPLY CONTEXT). Only pass fields that change. A date change moves the whole session the exercise belongs to. Never re-log with log_workout for a correction.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            id: {
+                type: SchemaType.NUMBER,
+                description: 'Exercise row id from REPLY CONTEXT. Optional when REPLY CONTEXT names a single workout id.',
+            },
+            date: { type: SchemaType.STRING, description: 'Corrected YYYY-MM-DD (applies to the whole session).' },
+            exercise: { type: SchemaType.STRING, description: 'Corrected exercise name.' },
+            sets: { type: SchemaType.NUMBER, description: 'Corrected number of sets.' },
+            reps: { type: SchemaType.NUMBER, description: 'Corrected reps per set.' },
+            weightKg: { type: SchemaType.NUMBER, description: 'Corrected flat weight in kg.' },
+            weightsKg: {
+                type: SchemaType.ARRAY,
+                description: 'Corrected progressive set weights e.g. [15,20,20,20].',
+                items: { type: SchemaType.NUMBER },
+            },
+            durationMin: { type: SchemaType.NUMBER, description: 'Corrected duration in minutes.' },
+            notes: { type: SchemaType.STRING, description: 'Corrected notes.' },
+        },
+    },
+};
+
+export const deleteWorkoutDeclaration: FunctionDeclaration = {
+    name: 'delete_workout',
+    description:
+        'Deletes a logged exercise by id (from REPLY CONTEXT). Set wholeSession to delete every exercise in that session.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            id: { type: SchemaType.NUMBER, description: 'Exercise row id from REPLY CONTEXT.' },
+            wholeSession: { type: SchemaType.BOOLEAN, description: 'Delete the entire session.' },
+        },
+    },
+};
+
 export const getWorkoutSummaryDeclaration: FunctionDeclaration = {
     name: 'get_workout_summary',
     description:
@@ -838,6 +878,8 @@ const CALENDAR_DECLARATIONS: FunctionDeclaration[] = [
 const WORKOUT_DECLARATIONS: FunctionDeclaration[] = [
     logWorkoutDeclaration,
     logBulkWorkoutsDeclaration,
+    editWorkoutDeclaration,
+    deleteWorkoutDeclaration,
     getWorkoutHistoryDeclaration,
     suggestWorkoutDeclaration,
     getWorkoutSummaryDeclaration,
