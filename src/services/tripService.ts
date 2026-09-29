@@ -144,26 +144,25 @@ export async function listTripExpenses(tripId: number): Promise<TripExpense[]> {
     return rows.map(mapTripExpense);
 }
 
-/** Latest exchange fxRate for the trip (MYR per 1 foreign), or null. */
-export async function getLatestExchangeRate(tripId: number): Promise<number | null> {
-    const db = requireDb();
-    const rows = await db
-        .select()
-        .from(expenses)
-        .where(eq(expenses.tripId, tripId))
-        .orderBy(desc(expenses.date), desc(expenses.id));
+/**
+ * MYR per 1 foreign unit for an exchange. Derived from the two amounts first: fx_rate only
+ * keeps 6 decimals (0.000163265 → 0.000163 for VND) and older rows saved it rounded to 0.
+ */
+export function exchangeRateOf(row: {
+    amount: number;
+    fxAmount: number | null;
+    fxRate: number | null;
+}): number | null {
+    if (row.fxAmount != null && row.fxAmount > 0 && row.amount > 0) return row.amount / row.fxAmount;
+    return row.fxRate != null && row.fxRate > 0 ? row.fxRate : null;
+}
 
-    for (const row of rows) {
+/** Latest exchange rate for the trip (MYR per 1 foreign), or null. */
+export async function getLatestExchangeRate(tripId: number): Promise<number | null> {
+    for (const row of await listTripExpenses(tripId)) {
         if (row.tripLeg !== 'exchange') continue;
-        if (row.fxRate != null) {
-            const rate = parseFloat(row.fxRate);
-            if (rate > 0) return rate;
-        }
-        if (row.fxAmount != null) {
-            const fx = parseFloat(row.fxAmount);
-            const myr = parseFloat(row.amount);
-            if (fx > 0 && myr > 0) return myr / fx;
-        }
+        const rate = exchangeRateOf(row);
+        if (rate != null) return rate;
     }
     return null;
 }
@@ -183,15 +182,7 @@ export async function getTripSummary(tripId: number): Promise<TripSummary | null
         if (row.tripLeg === 'exchange') {
             exchangedMyr += row.amount;
             fundReceived += row.fxAmount ?? 0;
-            if (row.fxRate != null && row.fxRate > 0 && latestExchangeRate == null) {
-                latestExchangeRate = row.fxRate;
-            } else if (
-                latestExchangeRate == null &&
-                row.fxAmount != null &&
-                row.fxAmount > 0
-            ) {
-                latestExchangeRate = row.amount / row.fxAmount;
-            }
+            latestExchangeRate ??= exchangeRateOf(row);
         } else if (row.tripLeg === 'fund') {
             fundSpent += row.fxAmount ?? 0;
         } else if (row.tripLeg === 'card') {
