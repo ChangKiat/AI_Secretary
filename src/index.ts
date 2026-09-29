@@ -3,7 +3,12 @@ import { randomUUID } from 'crypto';
 import { message } from 'telegraf/filters';
 import { GoogleGenerativeAI, GenerativeModel, ChatSession, Part } from '@google/generative-ai';
 import 'dotenv/config';
-import { appendExpense, getFixedExpensesForToday, formatBulkExpenseLogReply } from './services/expenseService';
+import {
+    appendExpense,
+    getFixedExpensesForToday,
+    formatBulkExpenseLogReply,
+    isFixedContributionRecorded,
+} from './services/expenseService';
 import { buildTripContextHint, TripLookup } from './services/tripExpenseService';
 import { upsertInvestmentFundingTransfer, resolveReplyRecord } from './services/incomeService';
 import {
@@ -157,6 +162,7 @@ async function main() {
                 let loggedList = '';
 
                 for (const exp of expensesToLog) {
+                    if (await isFixedContributionRecorded(exp)) continue;
                     const expenseId = await appendExpense(
                         exp.date,
                         exp.amount,
@@ -194,6 +200,8 @@ async function main() {
                     const toFund = exp.toInvestmentAccount ? ` → ${exp.toInvestmentAccount}` : '';
                     loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount}${via}${toFund}${loanNote})`;
                 }
+
+                if (!loggedList) return;
 
                 const msg = `🗓️ *Automated Billing:* Good morning! I just logged today's scheduled expenses:${loggedList}`;
                 await bot.telegram.sendMessage(MY_CHAT_ID, msg, { parse_mode: 'Markdown' });

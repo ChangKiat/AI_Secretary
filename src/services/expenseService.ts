@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { expenses, fixedExpenses, investmentEvents } from '../db/schema';
 import { getExpenseCategories, resolveCategory } from '../config/expenseCategories';
@@ -436,8 +436,34 @@ export type DueFixedExpense = {
     description: string;
     paymentMethod: string | null;
     toInvestmentAccount: string | null;
+    instrumentId: number | null;
     loan: (InstallmentSplit & { method: LoanMethod }) | null;
 };
+
+/**
+ * True when the dashboard already recorded this holding-linked bill as a unit trust
+ * contribution (buy + its own expense) on `date`, so the cron must not log it again.
+ * The cron otherwise owns the bill's expense; the dashboard attaches its buy to it.
+ */
+export async function isFixedContributionRecorded(
+    exp: Pick<DueFixedExpense, 'instrumentId' | 'date' | 'amount'>
+): Promise<boolean> {
+    if (exp.instrumentId == null) return false;
+    const db = requireDb();
+    const rows = await db
+        .select({ amount: investmentEvents.amount })
+        .from(investmentEvents)
+        .where(
+            and(
+                eq(investmentEvents.instrumentId, exp.instrumentId),
+                eq(investmentEvents.eventType, 'buy'),
+                eq(investmentEvents.date, exp.date),
+                isNotNull(investmentEvents.linkedExpenseId)
+            )
+        );
+    const cents = (n: number) => Math.round(n * 100);
+    return rows.some((row) => cents(parseFloat(row.amount ?? '0')) === cents(exp.amount));
+}
 
 export async function getFixedExpensesForToday(): Promise<DueFixedExpense[]> {
     const db = requireDb();
@@ -472,6 +498,7 @@ export async function getFixedExpensesForToday(): Promise<DueFixedExpense[]> {
             toInvestmentAccount: row.toInvestmentAccount
                 ? resolvePaymentMethod(row.toInvestmentAccount)
                 : null,
+            instrumentId: row.instrumentId ?? null,
         };
         const loan = loanFieldsFromRow(row);
         if (!loan.loanMethod) {

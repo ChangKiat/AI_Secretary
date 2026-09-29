@@ -62,6 +62,9 @@ export const fixedExpenses = pgTable('fixed_expenses', {
     active: boolean('active').default(true).notNull(),
     paymentMethod: text('payment_method'),
     toInvestmentAccount: text('to_investment_account'),
+    instrumentId: integer('instrument_id').references(() => investmentInstruments.id, {
+        onDelete: 'set null',
+    }),
     /** reducing | flat | included */
     loanMethod: text('loan_method'),
     originalPrincipal: numeric('original_principal', { precision: 12, scale: 2 }),
