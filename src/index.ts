@@ -4,13 +4,19 @@ import { message } from 'telegraf/filters';
 import { GoogleGenerativeAI, GenerativeModel, ChatSession, Part } from '@google/generative-ai';
 import 'dotenv/config';
 import { appendExpense, getFixedExpensesForToday, formatBulkExpenseLogReply } from './services/expenseService';
+import { buildTripContextHint, TripLookup } from './services/tripExpenseService';
 import { upsertInvestmentFundingTransfer, resolveReplyRecord } from './services/incomeService';
 import {
     accrueInterestForSchedule,
     getInterestSchedulesForToday,
 } from './services/interestScheduleService';
 import { applyLoanPayment } from './services/loanService';
-import { handleToolCall, resolveToolName, TOOLS_READING_MODEL_REPLY } from './tools/toolHandler';
+import {
+    handleToolCall,
+    replyInChunks,
+    resolveToolName,
+    TOOLS_READING_MODEL_REPLY,
+} from './tools/toolHandler';
 import { getDomainDeclarations } from './tools/tools';
 import { formatBulkWorkoutLogReply, getWorkoutSessionRows } from './services/gymService';
 import {
@@ -397,10 +403,12 @@ async function runChatTurn(
         const workoutBatchCollector: import('./services/gymService').WorkoutLogEntry[] = [];
         const mealBatchCollector: import('./services/nutritionService').MealBatchEntry[] = [];
         const expenseBatchCollector: import('./services/expenseService').ExpenseBatchEntry[] = [];
+        const expenseSkipCollector: import('./services/expenseService').SkippedExpense[] = [];
         const workoutBatchSessionId = shouldBatchWorkouts ? randomUUID() : undefined;
+        const tripLookup = new TripLookup();
 
         for (const call of functionCalls) {
-            const callOptions = { ...toolOptions };
+            const callOptions = { ...toolOptions, tripLookup };
             if (shouldBatchWorkouts && call.name === 'log_workout') {
                 callOptions.suppressWorkoutReply = true;
                 callOptions.workoutBatchCollector = workoutBatchCollector;
@@ -413,6 +421,7 @@ async function runChatTurn(
             if (shouldBatchExpenses && call.name === 'log_expense') {
                 callOptions.suppressExpenseReply = true;
                 callOptions.expenseBatchCollector = expenseBatchCollector;
+                callOptions.expenseSkipCollector = expenseSkipCollector;
             }
             const toolResult = await handleToolCall(call, turnChat, ctx, callOptions);
             if (toolResult === 'awaiting_input') {
@@ -441,9 +450,10 @@ async function runChatTurn(
             const { progress } = await getTodayMacroProgress(userId, date);
             await ctx.reply(formatBulkMealLogReply(date, mealBatchCollector, progress));
         }
-        if (expenseBatchCollector.length > 1) {
-            await ctx.reply(
-                formatBulkExpenseLogReply(expenseBatchCollector[0].date, expenseBatchCollector)
+        if (expenseBatchCollector.length + expenseSkipCollector.length > 0) {
+            await replyInChunks(
+                ctx,
+                formatBulkExpenseLogReply(expenseBatchCollector, expenseSkipCollector)
             );
         }
 
@@ -590,9 +600,13 @@ async function routeAndExecute(
         specialists.includes('meal') &&
         !hasMoneySignal(textForContext);
 
+    // Only the expense specialist needs trip dates/currencies (to read "32k" as VND etc.).
+    const tripHint = specialists.includes('expense') ? await buildTripContextHint(klIsoDate()) : '';
+
     for (const domain of specialists) {
+        const domainPrompt = domain === 'expense' ? contextPrompt + tripHint : contextPrompt;
         const specialistParts =
-            mediaParts.length > 0 ? [...mediaParts, contextPrompt] : contextPrompt;
+            mediaParts.length > 0 ? [...mediaParts, domainPrompt] : domainPrompt;
         const heavy = options?.heavy && domain === 'expense';
         const domainToolOptions =
             domain === 'expense' && suppressExpenseNoOp

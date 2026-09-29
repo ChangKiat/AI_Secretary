@@ -12,6 +12,11 @@ RULES:
 - PAYMENT METHOD: When user says how they paid, set paymentMethod to a listed account name only (or a clear nickname that maps to one, e.g. TNG → TnG, "world card" → RHB World Card). Do NOT invent new account names. Omit when not stated or when nothing listed matches.
 - RESTAURANT RECEIPT: One log_expense for the grand total only (category Food). Description = restaurant name or "restaurant bill". Do NOT log each line item as a separate expense. Meal line-item selection is handled by the meal specialist.
 - Bank/credit card statements with multiple transactions → log_bulk_expenses. Non-restaurant single receipt → log_expense.
+- TYPED LISTS: Several purchases typed one per line → ONE log_bulk_expenses call with one entry per line. Never merge, skip or reorder lines.
+- DATE HEADERS: A line that is only a date (26/09/2026, 26/9) is DD/MM/YYYY and applies to every line below it until the next date line. Pass dates as YYYY-MM-DD.
+- AMOUNTS: Copy each price exactly as typed into amountText ("32k", "rm20", "1.2m"). k = thousand, m/tr = million. Quantities and sizes (500g, 2 pcs, 3in1) are NOT the price—the price is usually the last number on the line.
+- PEOPLE & CASH: "with Richard" stays in the description—it is NOT a reimbursement unless the user says that person paid them back. "cash" → paymentMethod Cash, not part of the description.
+- TRIPS: When [TRIPS] context is present, follow it for currency and tripExpense. Never convert currencies yourself; the MYR conversion and trip board linking are automatic.
 - DATE RULE for statements: Use the statement date for the year. NEVER use today's date for historical transactions.
 - Setting up a NEW recurring/fixed bill, interest schedule, or budget is handled by the finance config specialist, not here.`;
 }

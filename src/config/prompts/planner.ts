@@ -15,7 +15,8 @@ Multi-domain examples:
 - Nutrition progress ("how much protein today", "macro summary") → meal only (not expense)
 - Restaurant / food-outlet receipt image → expense AND meal (expense logs bill total; meal picks line items)
 - Receipt image with a payment caption (TnG, touch and go, GrabPay, cash, etc.) → still expense (+ meal if food outlet); never chat alone
-- Any message with a price (RM/MYR) or payment method → never chat alone; include expense
+- Any message with a price (RM/MYR, a k/m amount like 32k, or a foreign currency) or payment method → never chat alone; include expense
+- A multi-line spending list (e.g. a trip log with date lines and amounts like "Coffee 32k", "Beer rm20") → expense ONLY; its food/drink lines are purchases, not meals to log
 - Bank/credit card statement image → expense only
 - Gym photo or workout description → workout
 - Gym machine results screen photo + exercise caption → workout (log cardio from the screen AND caption exercises together)

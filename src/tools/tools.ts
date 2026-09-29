@@ -11,6 +11,18 @@ function categoryParam(prefix = ''): { type: SchemaType.STRING; description: str
     return { type: SchemaType.STRING, description: prefix ? `${prefix} ${base}` : base };
 }
 
+const amountTextParam = {
+    type: SchemaType.STRING,
+    description:
+        'The price exactly as the user typed it, including any k/m suffix or currency word, e.g. "32k", "rm20", "1.2m", "45,000đ". Not quantities or sizes like "500g" or "2 pcs". Omit when reading an image.',
+} as const;
+
+const tripExpenseParam = {
+    type: SchemaType.BOOLEAN,
+    description:
+        'Only when [TRIPS] lists a trip covering this date: true if this was spent as part of that trip (food, drinks, transport, activities, shopping, tips—including RM-priced items), false for home bills, subscriptions, investments or transfers.',
+} as const;
+
 function buildLogExpenseDeclaration(): FunctionDeclaration {
     return {
         name: 'log_expense',
@@ -21,6 +33,8 @@ function buildLogExpenseDeclaration(): FunctionDeclaration {
             properties: {
                 amount: { type: SchemaType.NUMBER, description: 'The cost or amount spent (gross amount you paid).' },
                 currency: { type: SchemaType.STRING, description: 'The currency code, e.g., MYR or USD.' },
+                amountText: amountTextParam,
+                tripExpense: tripExpenseParam,
                 category: categoryParam(),
                 description: { type: SchemaType.STRING, description: 'Brief description of what was purchased.' },
                 date: {
@@ -146,18 +160,20 @@ function buildLogBulkExpensesDeclaration(): FunctionDeclaration {
     return {
         name: 'log_bulk_expenses',
         description:
-            'Use this when extracting multiple transactions from a bank statement or long list. It logs an array of expenses all at once.',
+            'Use this when extracting multiple transactions from a bank statement, or for a typed list of several purchases (one entry per line, each with its own date). It logs an array of expenses all at once.',
         parameters: {
             type: SchemaType.OBJECT,
             properties: {
                 expenses: {
                     type: SchemaType.ARRAY,
-                    description: 'A list of all the outgoing expenses found in the document.',
+                    description: 'A list of all the outgoing expenses found in the document or message.',
                     items: {
                         type: SchemaType.OBJECT,
                         properties: {
                             amount: { type: SchemaType.NUMBER, description: 'The cost or amount spent.' },
                             currency: { type: SchemaType.STRING, description: 'The currency code, e.g., MYR or USD.' },
+                            amountText: amountTextParam,
+                            tripExpense: tripExpenseParam,
                             category: categoryParam(),
                             description: { type: SchemaType.STRING, description: 'Brief description of what was purchased.' },
                             date: {

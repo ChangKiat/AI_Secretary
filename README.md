@@ -7,6 +7,7 @@ A proactive personal assistant built with Node.js and TypeScript. Uses Google Ge
 - **Conversational UI** via Telegram (text, voice, photos, PDFs)
 - **Cost-optimized AI**: `gemini-3.5-flash-lite` by default, `gemini-3.5-flash` for heavy PDF extraction
 - **Finances**: Log expenses, recurring bills, spending summaries (Supabase)
+- **Trips**: Expenses dated inside a trip (created in the Dashboard) land on its trip board. Trip-currency amounts (`32k`, `1.2m`) are converted to MYR at the trip's latest exchange rate: cash is logged as spending from exchanged trip cash, a card or e-wallet as a card charge. RM items the model marks as trip spending are grouped into the trip. A dated list (`26/09/2026` lines followed by items) is logged in one go, with a per-day breakdown and possible-duplicate warnings.
 - **Calendar**: Create events and check schedule (Google Calendar)
 - **Gym**: Log workouts, view history, get suggestions
 - **Nutrition**: Log meals from photos with protein estimates, daily summaries, meal suggestions

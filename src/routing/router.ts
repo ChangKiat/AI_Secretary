@@ -37,6 +37,11 @@ function parseDomains(raw: unknown): RouteDomain[] {
 
 const PRICE_SIGNAL =
     /\brm\s*\d|\bmyr\s*\d|\d+\s*(?:rm|myr)\b|\$\s*\d/i;
+// Travel prices: "32k", "1.2mil", "2tr" (VND) — but not distances ("5k run", "ran 10k", "5km").
+const K_AMOUNT_SIGNAL =
+    /(?<!\b(?:ran|run|jog|jogged|walk|walked|cycled|rode)\s{1,3})\b\d+(?:[.,]\d+)?\s*(?:k|mil|tr)\b(?!\s*(?:run|jog|walk|race|steps?)\b)/i;
+const FOREIGN_PRICE_SIGNAL =
+    /\b\d[\d.,]*\s*(?:vnd|usd|sgd|thb|idr|jpy|krw|twd|cny|rmb|hkd|eur|gbp|aud|php)\b|\b(?:vnd|usd|sgd|thb|idr|jpy|krw|twd|cny|rmb|hkd|eur|gbp|aud|php)\s*\d|\d\s*[₫đ฿€£]/i;
 const PAYMENT_SIGNAL =
     /\b(tng|touch\s*(?:n|and|&)\s*go|touchngo|grabpay|shopeepay|cimb|maybank|cash|credit\s*card)\b/i;
 
@@ -60,15 +65,39 @@ const TIME_EXPR_SIGNAL =
 const FINANCE_CONFIG_SIGNAL =
     /\b(fixed (?:expense|bill)|recurring (?:bill|expense|payment|interest)|quarterly bill|yearly bill|interest schedule|automate interest|schedule.*interest|budgets?)\b/i;
 
+function hasPriceSignal(text: string): boolean {
+    return PRICE_SIGNAL.test(text) || K_AMOUNT_SIGNAL.test(text) || FOREIGN_PRICE_SIGNAL.test(text);
+}
+
 /** Whether the text itself names a price or payment method (vs. relying on an image to supply one). */
 export function hasMoneySignal(text: string): boolean {
-    return PRICE_SIGNAL.test(text) || PAYMENT_SIGNAL.test(text);
+    return hasPriceSignal(text) || PAYMENT_SIGNAL.test(text);
+}
+
+/** A line that is only a date: "26/09/2026", "26/9", "26-09-2026:". */
+const DATE_HEADER_LINE = /^\s*\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\s*:?\s*$/;
+
+/**
+ * A typed spending list (e.g. a trip log): 3+ priced lines plus a date header or
+ * travel-style amounts. Its coffee/beer lines are purchases, not meals, so only
+ * expense should see it. A plain "breakfast rm8 / lunch rm12 / dinner rm10" still
+ * reaches meal as before.
+ */
+export function isExpenseLedger(text: string): boolean {
+    const lines = text.split(/\r?\n/);
+    if (lines.filter(hasPriceSignal).length < 3) return false;
+    return (
+        lines.some((line) => DATE_HEADER_LINE.test(line)) ||
+        K_AMOUNT_SIGNAL.test(text) ||
+        FOREIGN_PRICE_SIGNAL.test(text)
+    );
 }
 
 /** If text has price/payment, drop chat and ensure expense is included (unless financeConfig already owns it — setup, not a logged transaction). */
 export function applyMoneyRoutingHints(text: string, domains: RouteDomain[]): RouteDomain[] {
     if (domains.includes('financeConfig')) return domains;
-    if (!PRICE_SIGNAL.test(text) && !PAYMENT_SIGNAL.test(text)) return domains;
+    if (isExpenseLedger(text)) return ['expense'];
+    if (!hasMoneySignal(text)) return domains;
     const next = domains.filter((d) => d !== 'chat');
     if (!next.includes('expense')) next.push('expense');
     return next.length > 0 ? next : ['expense'];
@@ -91,7 +120,7 @@ export function routeByHeuristics(text: string, hasMedia: boolean): RouteDomain[
 
     const hasScheduleSignal = FUTURE_DATE_SIGNAL.test(text) && TIME_EXPR_SIGNAL.test(text);
 
-    if (PRICE_SIGNAL.test(text) || PAYMENT_SIGNAL.test(text)) push('expense');
+    if (hasMoneySignal(text)) push('expense');
     if (SPECIFIC_FOOD_SIGNAL.test(text) || BODY_WEIGHT_SIGNAL.test(text)) {
         push('meal');
     } else if (GENERIC_MEAL_SIGNAL.test(text) && !hasScheduleSignal) {

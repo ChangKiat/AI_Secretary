@@ -4,19 +4,21 @@ import { ChatSession, FunctionCall } from '@google/generative-ai';
 import { resolveCategory, upsertBudget, getBudgets } from '../config/expenseCategories';
 import { resolvePaymentMethod } from '../config/paymentMethods';
 import {
-    appendExpense,
     getSpendingSummary,
     addFixedExpense,
     updateFixedExpensePrice,
     getAllFixedExpenses,
     deleteFixedExpense,
-    logBulkExpenses,
     formatExpenseLogReply,
+    formatBulkExpenseLogReply,
     updateExpense,
     deleteExpense,
     getExpenseById,
     ExpenseBatchEntry,
+    SkippedExpense,
 } from '../services/expenseService';
+import { logExpenseWithTrip, recomputeTripLegAmount, TripLookup } from '../services/tripExpenseService';
+import { getTripById } from '../services/tripService';
 import {
     appendIncome,
     appendReimbursements,
@@ -94,6 +96,9 @@ export interface ToolCallOptions {
     mealBatchCollector?: MealBatchEntry[];
     suppressExpenseReply?: boolean;
     expenseBatchCollector?: ExpenseBatchEntry[];
+    expenseSkipCollector?: SkippedExpense[];
+    /** Shared across one model turn so a long trip list reads trips/rates once. */
+    tripLookup?: TripLookup;
     suppressNoOpReply?: boolean;
     replyToExpenseId?: number;
     replyTarget?: ReplyRecordTarget;
@@ -150,6 +155,38 @@ function resolveLogDate(argsDate: string | undefined, options?: ToolCallOptions)
     }
 
     return argsDate;
+}
+
+/** The model occasionally echoes the user's "26/09/2026" header instead of ISO. */
+function toIsoDate(date: string | undefined): string | undefined {
+    const m = date?.trim().match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+    return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : date;
+}
+
+const TELEGRAM_TEXT_LIMIT = 4000;
+
+/** Long lists (a trip ledger, a statement) can pass Telegram's 4096-char message cap. */
+export async function replyInChunks(ctx: Context, text: string): Promise<void> {
+    let chunk = '';
+    for (const line of text.split('\n')) {
+        if (chunk && chunk.length + line.length + 1 > TELEGRAM_TEXT_LIMIT) {
+            await ctx.reply(chunk);
+            chunk = '';
+        }
+        chunk = chunk ? `${chunk}\n${line}` : line;
+    }
+    if (chunk) await ctx.reply(chunk);
+}
+
+interface ExpenseItemArgs {
+    date?: string;
+    amount: number;
+    currency?: string;
+    amountText?: string;
+    category: string;
+    description: string;
+    paymentMethod?: string;
+    tripExpense?: boolean;
 }
 
 interface WorkoutArgs {
@@ -337,70 +374,85 @@ export async function handleToolCall(
     }
 
     if (call.name === 'log_expense') {
-        const { date, amount, currency, category, description, reimbursements, paymentMethod } =
-            call.args as {
-            date?: string;
-            amount: number;
-            currency?: string;
-            category: string;
-            description: string;
-            paymentMethod?: string;
+        const args = call.args as ExpenseItemArgs & {
             reimbursements?: { source: string; amount: number }[];
         };
-        const resolvedDate = resolveLogDate(date, options);
-        const resolvedCurrency = currency || 'MYR';
-        const resolvedCategory = resolveCategory(category);
-        const resolvedPaymentMethod = resolvePaymentMethod(paymentMethod);
-        const expenseId = await appendExpense(
-            resolvedDate,
-            amount,
-            resolvedCurrency,
-            resolvedCategory,
-            description,
-            resolvedPaymentMethod
+        const resolvedDate = resolveLogDate(toIsoDate(args.date), options);
+        const resolvedCategory = resolveCategory(args.category);
+        const result = await logExpenseWithTrip(
+            {
+                date: resolvedDate,
+                amount: args.amount,
+                currency: args.currency,
+                amountText: args.amountText,
+                category: resolvedCategory,
+                description: args.description,
+                paymentMethod: resolvePaymentMethod(args.paymentMethod),
+                tripExpense: args.tripExpense,
+            },
+            options?.tripLookup ?? new TripLookup()
         );
+        if (result.status === 'skipped') {
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'log_expense',
+                        response: { status: 'not_logged', reason: result.skipped.reason },
+                    },
+                },
+            ]);
+            if (options?.suppressExpenseReply) {
+                options.expenseSkipCollector?.push(result.skipped);
+            } else {
+                await ctx.reply(formatBulkExpenseLogReply([], [result.skipped]));
+            }
+            return 'complete';
+        }
+
+        const entry = result.entry;
+        // Shared-bill shares come in the bill's currency; trip-currency rows are stored in MYR.
+        const reimbursements =
+            entry.fxRate != null
+                ? args.reimbursements?.map((r) => ({
+                      ...r,
+                      amount: Math.round(r.amount * entry.fxRate! * 100) / 100,
+                  }))
+                : args.reimbursements;
         if (reimbursements?.length) {
-            await appendReimbursements(expenseId, reimbursements, resolvedDate);
+            await appendReimbursements(entry.expenseId, reimbursements, resolvedDate);
         }
         await chat.sendMessage([
             { functionResponse: { name: 'log_expense', response: { status: 'success' } } },
         ]);
         if (options?.suppressExpenseReply) {
-            options.expenseBatchCollector?.push({
-                date: resolvedDate,
-                amount,
-                currency: resolvedCurrency,
-                category: resolvedCategory,
-                description,
-                expenseId,
-                paymentMethod: resolvedPaymentMethod,
-                reimbursements,
-            });
+            options.expenseBatchCollector?.push({ ...entry, reimbursements });
             return 'complete';
         }
         if (reimbursements?.length) {
             await ctx.reply(
                 formatSharedExpenseReply(
                     resolvedDate,
-                    amount,
-                    resolvedCurrency,
+                    entry.amount,
+                    entry.currency,
                     resolvedCategory,
-                    description,
+                    args.description,
                     reimbursements,
-                    expenseId,
-                    resolvedPaymentMethod
+                    entry.expenseId,
+                    entry.paymentMethod
                 )
             );
         } else {
             await ctx.reply(
                 formatExpenseLogReply(
                     resolvedDate,
-                    amount,
-                    resolvedCurrency,
+                    entry.amount,
+                    entry.currency,
                     resolvedCategory,
-                    description,
-                    expenseId,
-                    resolvedPaymentMethod
+                    args.description,
+                    entry.expenseId,
+                    entry.paymentMethod,
+                    undefined,
+                    entry
                 )
             );
         }
@@ -479,10 +531,33 @@ export async function handleToolCall(
             await ctx.reply(`⚠️ Could not find expense #${id} to update.`);
             return 'complete';
         }
-        const updated = await updateExpense(id, {
-            date: args.date,
+        let amountFields: Parameters<typeof updateExpense>[1] = {
             amount: args.amount,
             currency: args.currency,
+        };
+        const isTripCurrencyRow = existing.tripLeg === 'fund' || existing.tripLeg === 'card';
+        if (isTripCurrencyRow && args.amount != null) {
+            const recomputed = recomputeTripLegAmount(existing, args.amount, args.currency);
+            if ('error' in recomputed) {
+                await chat.sendMessage([
+                    {
+                        functionResponse: {
+                            name: 'edit_expense',
+                            response: { status: 'failed', reason: recomputed.error },
+                        },
+                    },
+                ]);
+                await ctx.reply(`⚠️ Couldn't update #${id}: ${recomputed.error}.`);
+                return 'complete';
+            }
+            amountFields = recomputed;
+        } else if (isTripCurrencyRow) {
+            // Trip-currency rows are always stored in MYR; a bare currency change would corrupt them.
+            amountFields = {};
+        }
+        const updated = await updateExpense(id, {
+            date: toIsoDate(args.date),
+            ...amountFields,
             category: args.category,
             description: args.description,
             paymentMethod: args.paymentMethod,
@@ -495,6 +570,7 @@ export async function handleToolCall(
             return 'complete';
         }
         const row = (await getExpenseById(id))!;
+        const trip = row.tripId != null ? await getTripById(row.tripId) : null;
         await chat.sendMessage([
             { functionResponse: { name: 'edit_expense', response: { status: 'success', expenseId: id } } },
         ]);
@@ -507,7 +583,8 @@ export async function handleToolCall(
                 row.description,
                 row.id,
                 row.paymentMethod,
-                '✅ Updated'
+                '✅ Updated',
+                { ...row, tripName: trip?.name }
             )
         );
         return 'complete';
@@ -1092,18 +1169,36 @@ export async function handleToolCall(
             await ctx.reply('⚠️ Could not read any expenses from that image. Try again or send as text.');
             return 'complete';
         }
-        await logBulkExpenses(expensesArray as Parameters<typeof logBulkExpenses>[0]);
+        const lookup = options?.tripLookup ?? new TripLookup();
+        const logged: ExpenseBatchEntry[] = [];
+        const skipped: SkippedExpense[] = [];
+        for (const item of expensesArray as Partial<ExpenseItemArgs>[]) {
+            const result = await logExpenseWithTrip(
+                {
+                    // Statement rows keep their own dates—no photo "today" override here.
+                    date: toIsoDate(item.date) || todayISO(),
+                    amount: Number(item.amount),
+                    currency: item.currency,
+                    amountText: item.amountText,
+                    category: resolveCategory(item.category),
+                    description: item.description?.trim() || 'Expense',
+                    paymentMethod: resolvePaymentMethod(item.paymentMethod),
+                    tripExpense: item.tripExpense,
+                },
+                lookup
+            );
+            if (result.status === 'logged') logged.push(result.entry);
+            else skipped.push(result.skipped);
+        }
         await chat.sendMessage([
             {
                 functionResponse: {
                     name: 'log_bulk_expenses',
-                    response: { status: 'success', count: expensesArray.length },
+                    response: { status: 'success', count: logged.length, notLogged: skipped.length },
                 },
             },
         ]);
-        await ctx.reply(
-            `✅ Successfully scanned the statement and logged ${expensesArray.length} expenses!`
-        );
+        await replyInChunks(ctx, formatBulkExpenseLogReply(logged, skipped));
         return 'complete';
     } else if (call.name === 'log_workout') {
         const args = call.args as WorkoutArgs;

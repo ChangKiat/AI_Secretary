@@ -140,6 +140,42 @@ export async function appendExpense(
     return row.id;
 }
 
+/** Trip-board details shown on an expense confirmation. */
+export interface ExpenseTripReplyInfo {
+    tripName?: string;
+    tripLeg?: TripLeg | null;
+    fxAmount?: number | null;
+    fxCurrency?: string | null;
+    duplicateOfIds?: number[];
+    note?: string;
+}
+
+const TRIP_LEG_LABEL: Record<TripLeg, string> = {
+    exchange: 'currency exchange',
+    fund: 'paid from trip cash',
+    card: 'card, MYR estimated at trip rate',
+};
+
+function round2(n: number): number {
+    return Math.round(n * 100) / 100;
+}
+
+function formatFx(amount: number, currency: string): string {
+    return `${currency} ${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+}
+
+/** "VND 32,000 ≈ MYR 5.12" for trip-currency rows, "MYR 20" otherwise. */
+function formatEntryAmount(
+    e: { amount: number; currency: string } & Pick<ExpenseTripReplyInfo, 'fxAmount' | 'fxCurrency'>
+): string {
+    const home = `${e.currency || 'MYR'} ${e.amount}`;
+    return e.fxAmount != null && e.fxCurrency ? `${formatFx(e.fxAmount, e.fxCurrency)} ≈ ${home}` : home;
+}
+
+function formatDuplicateHint(ids: number[] | undefined): string {
+    return ids?.length ? `possible duplicate of ${ids.map((id) => `#${id}`).join(', ')}` : '';
+}
+
 export function formatExpenseLogReply(
     date: string,
     amount: number,
@@ -148,21 +184,29 @@ export function formatExpenseLogReply(
     description?: string,
     expenseId?: number,
     paymentMethod?: string | null,
-    headerPrefix = '✅ Logged'
+    headerPrefix = '✅ Logged',
+    trip?: ExpenseTripReplyInfo
 ): string {
     const header = expenseId != null ? `${headerPrefix} #${expenseId}` : headerPrefix;
     const lines = [
         header,
         `📅 Date: ${date}`,
-        `💵 Amount: ${currency || 'MYR'} ${amount}`,
+        `💵 Amount: ${formatEntryAmount({ amount, currency, ...trip })}`,
         `📁 Category: ${resolveCategory(category)}`,
     ];
     if (description) lines.push(`📝 Description: ${description}`);
     if (paymentMethod) lines.push(`💳 Paid via: ${paymentMethod}`);
+    if (trip?.tripName) {
+        const leg = trip.tripLeg ? ` (${TRIP_LEG_LABEL[trip.tripLeg]})` : '';
+        lines.push(`🧳 Trip: ${trip.tripName}${leg}`);
+    }
+    const dup = formatDuplicateHint(trip?.duplicateOfIds);
+    if (dup) lines.push(`⚠️ ${dup[0].toUpperCase()}${dup.slice(1)}`);
+    if (trip?.note) lines.push(`ℹ️ ${trip.note[0].toUpperCase()}${trip.note.slice(1)}`);
     return lines.join('\n');
 }
 
-export interface ExpenseBatchEntry {
+export interface ExpenseBatchEntry extends ExpenseTripReplyInfo {
     date: string;
     amount: number;
     currency: string;
@@ -170,31 +214,87 @@ export interface ExpenseBatchEntry {
     description?: string;
     expenseId: number;
     paymentMethod?: string | null;
+    fxRate?: number | null;
     reimbursements?: { source: string; amount: number }[];
 }
 
-export function formatBulkExpenseLogReply(date: string, entries: ExpenseBatchEntry[]): string {
-    const lines = [
-        `✅ Logged ${entries.length} expenses`,
-        `📅 Date: ${date}`,
-        '',
-    ];
-    let total = 0;
-    const currency = entries[0]?.currency || 'MYR';
+/** An item from a list the bot deliberately did not log, with the reason shown to the user. */
+export interface SkippedExpense {
+    date: string;
+    description: string;
+    amount: number;
+    currency: string;
+    reason: string;
+}
+
+function formatTotals(entries: ExpenseBatchEntry[]): string {
+    const byCurrency = new Map<string, number>();
     for (const e of entries) {
-        total += e.amount;
         const cur = e.currency || 'MYR';
+        byCurrency.set(cur, (byCurrency.get(cur) ?? 0) + e.amount);
+    }
+    return [...byCurrency].map(([cur, sum]) => `${cur} ${round2(sum)}`).join(' + ');
+}
+
+export function formatSkippedExpense(s: SkippedExpense): string {
+    return `• ${s.date} ${s.description} · ${formatFx(s.amount, s.currency)} — ${s.reason}`;
+}
+
+export function formatBulkExpenseLogReply(
+    entries: ExpenseBatchEntry[],
+    skipped: SkippedExpense[] = []
+): string {
+    if (entries.length === 0) {
+        return ['⚠️ Not logged:', ...skipped.map(formatSkippedExpense)].join('\n');
+    }
+    const plural = entries.length === 1 ? '' : 's';
+    const lines = [`✅ Logged ${entries.length} expense${plural}`];
+
+    const tripNames = [...new Set(entries.map((e) => e.tripName).filter(Boolean))];
+    const singleTrip = tripNames.length === 1 ? tripNames[0] : undefined;
+    if (singleTrip) lines.push(`🧳 Trip: ${singleTrip}`);
+
+    const bullet = (e: ExpenseBatchEntry): string => {
         const cat = resolveCategory(e.category);
         const desc = e.description ? ` — ${e.description}` : '';
-        let bullet = `• #${e.expenseId} ${cat} · ${cur} ${e.amount}${desc}`;
+        let text = `• #${e.expenseId} ${cat} · ${formatEntryAmount(e)}${desc}`;
         if (e.reimbursements?.length) {
             const reimbursed = e.reimbursements.reduce((s, r) => s + r.amount, 0);
-            const net = e.amount - reimbursed;
-            bullet += ` · your share ${cur} ${net}`;
+            text += ` · your share ${e.currency || 'MYR'} ${e.amount - reimbursed}`;
         }
-        lines.push(bullet);
+        if (tripNames.length > 1 && e.tripName) text += ` · 🧳 ${e.tripName}`;
+        if (singleTrip && !e.tripName) text += ' · not on trip';
+        const flags = [e.note, formatDuplicateHint(e.duplicateOfIds)].filter(Boolean);
+        if (flags.length) text += ` ⚠️ ${flags.join('; ')}`;
+        return text;
+    };
+
+    const dates = [...new Set(entries.map((e) => e.date))].sort();
+    if (dates.length <= 1) {
+        if (dates[0]) lines.push(`📅 Date: ${dates[0]}`);
+        lines.push('', ...entries.map(bullet));
+    } else {
+        for (const date of dates) {
+            const day = entries.filter((e) => e.date === date);
+            lines.push('', `📅 ${date}`, ...day.map(bullet), `   Day total: ${formatTotals(day)}`);
+        }
     }
-    lines.push('', `💵 Total: ${currency} ${Math.round(total * 100) / 100}`);
+
+    lines.push('', `💵 Total: ${formatTotals(entries)}`);
+
+    const cashByCurrency = new Map<string, number>();
+    for (const e of entries) {
+        if (e.tripLeg !== 'fund' || e.fxAmount == null || !e.fxCurrency) continue;
+        cashByCurrency.set(e.fxCurrency, (cashByCurrency.get(e.fxCurrency) ?? 0) + e.fxAmount);
+    }
+    if (cashByCurrency.size > 0) {
+        const cash = [...cashByCurrency].map(([cur, sum]) => formatFx(sum, cur)).join(' + ');
+        lines.push(`💴 From trip cash: ${cash}`);
+    }
+
+    if (skipped.length > 0) {
+        lines.push('', `⚠️ Not logged (${skipped.length}):`, ...skipped.map(formatSkippedExpense));
+    }
     return lines.join('\n');
 }
 
@@ -627,30 +727,9 @@ export async function deactivateFixedExpenseById(id: number): Promise<boolean> {
     return (result.count ?? 0) > 0;
 }
 
-export async function logBulkExpenses(expenseList: {
-    date?: string;
-    amount: number;
-    currency?: string;
-    category?: string;
-    description: string;
-    paymentMethod?: string | null;
-}[]) {
-    const db = requireDb();
-    await db.insert(expenses).values(
-        expenseList.map((exp) => ({
-            date: formatDateForDb(exp.date),
-            amount: String(exp.amount),
-            currency: exp.currency || 'MYR',
-            category: resolveCategory(exp.category),
-            description: exp.description,
-            paymentMethod: resolvePaymentMethod(exp.paymentMethod),
-        }))
-    );
-}
-
 // ponytail self-check: bulk expense reply format without DB
 if (require.main === module) {
-    const bulk = formatBulkExpenseLogReply('2026-07-25', [
+    const bulk = formatBulkExpenseLogReply([
         {
             date: '2026-07-25',
             amount: 12.5,
@@ -677,6 +756,60 @@ if (require.main === module) {
     }
     if (!bulk.includes('your share MYR 17') || !bulk.includes('Total: MYR 69.5')) {
         throw new Error(`bulk expense totals/shared failed:\n${bulk}`);
+    }
+
+    const trip = formatBulkExpenseLogReply(
+        [
+            {
+                date: '2026-09-26',
+                amount: 5.12,
+                currency: 'MYR',
+                category: 'Drink',
+                description: 'Black coffee',
+                expenseId: 1200,
+                tripName: 'Danang',
+                tripLeg: 'fund',
+                fxAmount: 32_000,
+                fxCurrency: 'VND',
+            },
+            {
+                date: '2026-09-26',
+                amount: 20,
+                currency: 'MYR',
+                category: 'Drink',
+                description: 'Beer with Justin',
+                expenseId: 1201,
+                paymentMethod: 'Cash',
+                tripName: 'Danang',
+                duplicateOfIds: [1174],
+            },
+            {
+                date: '2026-09-27',
+                amount: 40,
+                currency: 'MYR',
+                category: 'Entertainment',
+                description: 'Alpine coasters',
+                expenseId: 1202,
+                tripName: 'Danang',
+                tripLeg: 'fund',
+                fxAmount: 250_000,
+                fxCurrency: 'VND',
+            },
+        ],
+        [{ date: '2026-09-30', description: 'Coffee', amount: 35_000, currency: 'VND', reason: 'no VND trip covers 2026-09-30' }]
+    );
+    for (const expected of [
+        'Logged 3 expenses',
+        '🧳 Trip: Danang',
+        '📅 2026-09-26',
+        '#1200 Other · VND 32,000 ≈ MYR 5.12 — Black coffee',
+        'possible duplicate of #1174',
+        'Day total: MYR 25.12',
+        'Total: MYR 65.12',
+        'From trip cash: VND 282,000',
+        'Not logged (1)',
+    ]) {
+        if (!trip.includes(expected)) throw new Error(`trip bulk format missing "${expected}":\n${trip}`);
     }
     console.log('expenseService self-check ok');
 }
