@@ -234,7 +234,9 @@ export class TripLookup {
     rowsOn(date: string): Promise<ExpenseRow[]> {
         let rows = this.rowsByDate.get(date);
         if (!rows) {
-            rows = requireDb().select().from(expenses).where(eq(expenses.date, date));
+            // execute() runs once; a bare Drizzle builder re-queries on every await and
+            // would see rows logged earlier in this same list.
+            rows = requireDb().select().from(expenses).where(eq(expenses.date, date)).execute();
             this.rowsByDate.set(date, rows);
         }
         return rows;
