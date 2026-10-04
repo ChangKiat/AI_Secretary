@@ -63,25 +63,6 @@ export async function createCalendarEvent(
     }
 }
 
-export async function grantCalendarAccess() {
-    try {
-        console.log("Attempting to make you the owner of the bot's calendar...");
-        await calendar.acl.insert({
-            calendarId: 'primary',
-            requestBody: {
-                role: 'owner',
-                scope: {
-                    type: 'user',
-                    value: 'changkiat1995@gmail.com',
-                },
-            },
-        });
-        console.log('🎉 SUCCESS: You are now the Co-Owner of the bot\'s calendar!');
-    } catch (error: any) {
-        console.error('Failed to share calendar:', error.response?.data || error.message);
-    }
-}
-
 export async function getSchedule(dateString: string) {
     try {
         const { timeMin, timeMax } = dayBounds(dateString);

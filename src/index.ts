@@ -370,14 +370,16 @@ async function runChatTurn(
     if (rawCalls && rawCalls.length > 0) {
         // Gemini expects ONE follow-up turn carrying a functionResponse for every call.
         // Handlers each send their own, which breaks the 2nd+ call of a multi-call turn
-        // (400 → "Sorry, I encountered an error"). Buffer them and send once at the end,
-        // unless a handler needs the model's follow-up text to answer the user.
-        // ponytail: a multi-call turn that includes a reply-reading tool still sends
-        // per call; upgrade path = handlers return their response instead of sending it.
+        // (400 → "Sorry, I encountered an error") and makes even a single log_* call
+        // wait a full model round trip before the user sees the confirmation. Buffer
+        // them and send once after every user-facing reply has gone out, unless a
+        // handler needs the model's follow-up text to answer the user.
+        // ponytail: a turn that includes a reply-reading tool still sends per call;
+        // upgrade path = handlers return their response instead of sending it.
         const pendingResponses: Part[] = [];
-        const deferResponses =
-            rawCalls.length > 1 &&
-            !rawCalls.some((c) => TOOLS_READING_MODEL_REPLY.has(resolveToolName(c.name)));
+        const deferResponses = !rawCalls.some((c) =>
+            TOOLS_READING_MODEL_REPLY.has(resolveToolName(c.name))
+        );
         const turnChat: ChatSession = Object.assign(Object.create(chat), {
             sendMessage: async (parts: Part[]) => {
                 pendingResponses.push(...parts);
@@ -436,13 +438,6 @@ async function runChatTurn(
                 awaiting = true;
             }
         }
-        if (pendingResponses.length > 0) {
-            // History bookkeeping only — every log above already replied to the user.
-            await chat.sendMessage(pendingResponses).catch((err) => {
-                console.warn('Deferred functionResponse send failed:', err);
-            });
-        }
-
         if (workoutBatchCollector.length > 1) {
             await ctx.reply(
                 formatBulkWorkoutLogReply(
@@ -463,6 +458,14 @@ async function runChatTurn(
                 ctx,
                 formatBulkExpenseLogReply(expenseBatchCollector, expenseSkipCollector)
             );
+        }
+
+        if (pendingResponses.length > 0) {
+            // History bookkeeping only — every log above already replied to the user,
+            // which is why this send comes last instead of blocking those replies.
+            await chat.sendMessage(pendingResponses).catch((err) => {
+                console.warn('Deferred functionResponse send failed:', err);
+            });
         }
 
         return awaiting ? 'awaiting_input' : 'complete';
@@ -595,9 +598,6 @@ async function routeAndExecute(
         return;
     }
 
-    let anyAwaiting = false;
-    let awaitDomain: SpecialistDomain | undefined;
-
     // A bare photo with no price/payment text is ambiguous—could be a receipt or
     // just a plate of food—so both specialists run. If expense finds no price to
     // log, it should stay quiet rather than ask "was this purchased?" on every
@@ -611,7 +611,12 @@ async function routeAndExecute(
     // Only the expense specialist needs trip dates/currencies (to read "32k" as VND etc.).
     const tripHint = specialists.includes('expense') ? await buildTripContextHint(klIsoDate()) : '';
 
-    for (const domain of specialists) {
+    // Each specialist has its own chat session and replies independently, so run
+    // them concurrently — a food-photo turn (expense + meal) costs one turn of
+    // latency instead of two. Reply order between domains is no longer guaranteed.
+    const runSpecialist = async (
+        domain: SpecialistDomain
+    ): Promise<'complete' | 'awaiting_input'> => {
         const domainPrompt = domain === 'expense' ? contextPrompt + tripHint : contextPrompt;
         const specialistParts =
             mediaParts.length > 0 ? [...mediaParts, domainPrompt] : domainPrompt;
@@ -621,7 +626,7 @@ async function routeAndExecute(
                 ? { ...mergedToolOptions, suppressNoOpReply: true }
                 : mergedToolOptions;
         try {
-            const status = await runDomainTurn(
+            return await runDomainTurn(
                 domain,
                 ctx,
                 specialistParts,
@@ -630,17 +635,13 @@ async function routeAndExecute(
                 domainToolOptions,
                 heavy
             );
-            if (status === 'awaiting_input') {
-                anyAwaiting = true;
-                awaitDomain = domain;
-            }
         } catch (error) {
             if (!isRetryableGeminiError(error)) throw error;
             console.log(
                 `🧭 ${domain} (${heavy ? 'heavy' : 'lite'}) overloaded — retrying with ${heavy ? 'lite' : 'heavy'} model`
             );
             delete session.chats[domain];
-            const status = await runDomainTurn(
+            return runDomainTurn(
                 domain,
                 ctx,
                 specialistParts,
@@ -649,12 +650,25 @@ async function routeAndExecute(
                 domainToolOptions,
                 !heavy
             );
-            if (status === 'awaiting_input') {
-                anyAwaiting = true;
-                awaitDomain = domain;
-            }
         }
-    }
+    };
+
+    // allSettled so one overloaded specialist can't cancel another's in-flight log;
+    // the first failure still surfaces to the caller's error reply afterwards.
+    const results = await Promise.allSettled(specialists.map(runSpecialist));
+    const failure = results.find(
+        (r): r is PromiseRejectedResult => r.status === 'rejected'
+    );
+    if (failure) throw failure.reason;
+
+    let anyAwaiting = false;
+    let awaitDomain: SpecialistDomain | undefined;
+    results.forEach((result, i) => {
+        if (result.status === 'fulfilled' && result.value === 'awaiting_input') {
+            anyAwaiting = true;
+            awaitDomain = specialists[i];
+        }
+    });
 
     if (anyAwaiting && awaitDomain) {
         userSessions.set(userId, session);

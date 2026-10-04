@@ -209,12 +209,6 @@ export async function getIncomeById(id: number) {
     };
 }
 
-export async function resolveReplyToExpenseId(text: string): Promise<number | undefined> {
-    const parsed = parseExpenseIdFromBotReply(text);
-    if (parsed == null) return undefined;
-    return (await expenseExists(parsed)) ? parsed : undefined;
-}
-
 export async function resolveReplyRecord(
     text: string,
     /** Per-user ownership check for meal/workout rows (expense/income are checked here). */

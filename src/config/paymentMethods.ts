@@ -57,21 +57,6 @@ export async function loadPaymentAccounts(): Promise<PaymentAccount[]> {
     return applyCache(accounts);
 }
 
-export function getPaymentAccounts(): PaymentAccount[] {
-    return cachedAccounts;
-}
-
-export function getPaymentAccountNames(): string[] {
-    return cachedAccounts.map((account) => account.name);
-}
-
-/** Names suitable for expense payment methods (excludes investment). */
-export function getExpensePaymentAccountNames(): string[] {
-    return cachedAccounts
-        .filter((account) => account.accountType !== 'investment')
-        .map((account) => account.name);
-}
-
 function tokenize(lower: string): string[] {
     return lower
         .split(/[^a-z0-9]+/)

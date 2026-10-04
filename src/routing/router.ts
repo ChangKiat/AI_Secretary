@@ -235,16 +235,4 @@ export function filterSpecialistDomains(domains: RouteDomain[]): SpecialistDomai
     );
 }
 
-export function updateSessionState(
-    sessions: Map<number, UserChatState>,
-    userId: number,
-    updates: Partial<Pick<UserChatState, 'awaitingInput' | 'activeDomain'>>
-) {
-    const state = sessions.get(userId);
-    if (state) {
-        Object.assign(state, updates);
-        state.lastActiveAt = Date.now();
-    }
-}
-
 export type { RouteDomain, SpecialistDomain };

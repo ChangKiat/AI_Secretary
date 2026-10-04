@@ -358,7 +358,7 @@ async function listOpenLots(instrumentId: number): Promise<InvestmentLot[]> {
 }
 
 function positionFromLots(
-    instrument: InvestmentInstrument,
+    _instrument: InvestmentInstrument,
     lots: InvestmentLot[]
 ): { quantity: number; costBasis: number } {
     let quantity = 0;

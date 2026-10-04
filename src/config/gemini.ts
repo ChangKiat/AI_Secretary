@@ -21,9 +21,13 @@ const generationConfig = {
 /**
  * A hung request during a Gemini outage can otherwise sit until Telegraf's own
  * 90s handler timeout kills the whole update with no reply to the user. Fail
- * faster so our own retry/heavy-model fallback gets a chance to run instead.
+ * fast on the lite model so the heavy-model fallback runs while the user is
+ * still waiting. The heavy model keeps more headroom: it reads PDFs/images and
+ * is the last resort, so killing a slow-but-healthy request there just turns
+ * a slow answer into no answer.
  */
-const requestOptions = { timeout: 20_000 };
+const requestOptions = { timeout: 10_000 };
+const heavyRequestOptions = { timeout: 20_000 };
 
 export function createPlannerModel(
     genAI: GoogleGenerativeAI,
@@ -36,7 +40,7 @@ export function createPlannerModel(
             tools: [{ functionDeclarations: getPlannerDeclarations() }],
             systemInstruction: buildPlannerInstruction(),
         },
-        requestOptions
+        options?.heavy ? heavyRequestOptions : requestOptions
     );
 }
 
@@ -54,7 +58,7 @@ export function createDomainModel(
             tools: [{ functionDeclarations: getDomainDeclarations(domain) }],
             systemInstruction: buildDomainInstruction(domain, categoryNames),
         },
-        requestOptions
+        options?.heavy ? heavyRequestOptions : requestOptions
     );
 }
 
@@ -71,12 +75,13 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * gemini-3.5-flash-lite returns 503 "high demand" fairly often. Wrap sendMessage
- * with one short retry before letting the error bubble up to model-fallback logic.
- * Kept small (1 retry, 20s request timeout each) so a full-outage worst case still
- * lands well under Telegraf's 90s handler timeout instead of stacking past it.
+ * gemini-3.5-flash-lite returns 503 "high demand" fairly often. Retrying the
+ * same overloaded model used to stack timeouts (lite ×2 + heavy ×2 ≈ 80s), so
+ * by default the error now bubbles straight up to the caller's heavy-model
+ * fallback — worst case lite 10s + heavy 20s ≈ 30s. Pass maxRetries > 0 to
+ * opt back in to same-model retries with exponential backoff.
  */
-export function wrapChatWithRetry(chat: ChatSession, maxRetries = 1): ChatSession {
+export function wrapChatWithRetry(chat: ChatSession, maxRetries = 0): ChatSession {
     const originalSendMessage = chat.sendMessage.bind(chat);
     chat.sendMessage = (async (...args: Parameters<ChatSession['sendMessage']>) => {
         let lastError: unknown;
@@ -94,21 +99,6 @@ export function wrapChatWithRetry(chat: ChatSession, maxRetries = 1): ChatSessio
     return chat;
 }
 
-export function startChatWithRetry(model: GenerativeModel, maxRetries = 1): ChatSession {
+export function startChatWithRetry(model: GenerativeModel, maxRetries = 0): ChatSession {
     return wrapChatWithRetry(model.startChat(), maxRetries);
-}
-
-/** @deprecated Use createPlannerModel or createDomainModel */
-export function createGeminiModel(
-    genAI: GoogleGenerativeAI,
-    modelName: string
-): GenerativeModel {
-    const categoryNames = getExpenseCategoryNames();
-    const domain: SpecialistDomain = 'expense';
-    return genAI.getGenerativeModel({
-        model: modelName,
-        generationConfig,
-        tools: [{ functionDeclarations: getDomainDeclarations(domain) }],
-        systemInstruction: buildDomainInstruction(domain, categoryNames),
-    });
 }
