@@ -19,7 +19,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "db:push": "drizzle-kit push",
+    "db:push:UNSAFE": "echo Refusing: never push to the shared DB. Use scripts/init-db.sql + scripts/migrate-*.sql && exit 1",
     "migrate:sheets": "tsx scripts/migrate-sheets-to-db.ts",
     "check:prompts": "tsx src/config/prompts/_check.ts",
     "test": "echo \"Error: no test specified\" && exit 1",

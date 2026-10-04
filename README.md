@@ -39,11 +39,9 @@ For `DATABASE_URL`, open Supabase → **Project Settings → Database** and copy
 
 In the Supabase SQL Editor, run the contents of [`scripts/init-db.sql`](scripts/init-db.sql).
 
-Or with Drizzle Kit (requires `DATABASE_URL`):
-
-```bash
-npm run db:push
-```
+- **New database:** run `scripts/init-db.sql`.
+- **Upgrading an existing database:** run the missing `scripts/migrate-*.sql` files.
+- **Never run `drizzle-kit push` against the shared database.** It drops columns, tables and indexes that the Dashboard relies on (the Agent and Dashboard share one DB).
 
 ### 4. Supabase Storage (optional, for meal photos)
 
