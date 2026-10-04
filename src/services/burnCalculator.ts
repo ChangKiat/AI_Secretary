@@ -132,3 +132,35 @@ export function estimateBurn(
 
     return { caloriesBurned, fatBurnG };
 }
+
+export interface WorkoutBurnInput {
+    exercise: string;
+    durationMin?: number | null;
+    sets?: number | null;
+    reps?: number | null;
+    /** Heaviest load (last of a progressive "10/20/30" list). */
+    topWeightKg?: number | null;
+    /** Machine/app-reported calories; used as-is when > 0. */
+    caloriesBurned?: number | null;
+}
+
+/**
+ * One burn rule for Telegram and the Dashboard: reported calories win when > 0,
+ * otherwise the MET estimate (null when body weight is unknown).
+ */
+export function resolveWorkoutBurn(
+    input: WorkoutBurnInput,
+    bodyWeightKg?: number | null
+): BurnEstimate | null {
+    if (input.caloriesBurned != null && input.caloriesBurned > 0) {
+        return burnFromReportedCalories(input.caloriesBurned);
+    }
+    return estimateBurn(
+        input.exercise,
+        input.durationMin ?? undefined,
+        input.sets ?? undefined,
+        input.reps ?? undefined,
+        input.topWeightKg ?? undefined,
+        bodyWeightKg
+    );
+}

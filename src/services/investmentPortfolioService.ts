@@ -1,12 +1,16 @@
-import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import {
+    expenses,
+    fixedExpenses,
     investmentEvents,
     investmentInstruments,
     investmentLots,
 } from '../db/schema';
+import { resolveCategory } from '../config/expenseCategories';
+import { resolvePaymentMethod } from '../config/paymentMethods';
 import { appendExpense } from './expenseService';
-import { appendIncome } from './incomeService';
+import { appendIncome, type DbExecutor } from './incomeService';
 import { getPaymentAccountById } from './paymentAccountService';
 
 export type InstrumentKind = 'equity' | 'fund' | 'fd' | 'other';
@@ -67,6 +71,12 @@ export interface HoldingPosition {
     lastPrice: number | null;
 }
 
+export interface AccountHoldingSummary {
+    id: number;
+    name: string;
+    kind: InstrumentKind;
+}
+
 export interface PortfolioSummary {
     paymentAccountId: number;
     holdings: HoldingPosition[];
@@ -105,6 +115,18 @@ function roundMoney(n: number): number {
 
 function roundQty(n: number): number {
     return Math.round(n * 1e8) / 1e8;
+}
+
+function roundUnitCost(n: number): number {
+    return Math.round(n * 1e6) / 1e6;
+}
+
+function parseFee(fee: number | null | undefined): number {
+    if (fee == null) return 0;
+    if (!Number.isFinite(fee) || fee < 0) {
+        throw new Error('Fee must be a non-negative number');
+    }
+    return roundMoney(fee);
 }
 
 function todayDateString(): string {
@@ -171,13 +193,80 @@ export function isValidInstrumentKind(value: unknown): value is InstrumentKind {
     return typeof value === 'string' && INSTRUMENT_KINDS.has(value as InstrumentKind);
 }
 
-async function requireInvestmentAccount(accountId: number) {
+function addCalendarMonths(dateStr: string, months: number): string {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const lastOfTarget = new Date(year, month - 1 + months + 1, 0);
+    const clampedDay = Math.min(day, lastOfTarget.getDate());
+    const result = new Date(year, month - 1 + months, clampedDay);
+    const y = result.getFullYear();
+    const m = String(result.getMonth() + 1).padStart(2, '0');
+    const d = String(result.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+async function requireActiveAccount(accountId: number) {
     const account = await getPaymentAccountById(accountId);
-    if (!account || !account.active) throw new Error('Investment account not found');
+    if (!account || !account.active) throw new Error('Account not found');
+    return account;
+}
+
+async function requireInvestmentAccount(accountId: number) {
+    const account = await requireActiveAccount(accountId);
     if (account.accountType !== 'investment') {
         throw new Error('Portfolio is only available on investment accounts');
     }
     return account;
+}
+
+async function requirePortfolioHostAccount(accountId: number) {
+    const account = await requireActiveAccount(accountId);
+    if (account.accountType !== 'account' && account.accountType !== 'investment') {
+        throw new Error('Portfolio is only available on bank or investment accounts');
+    }
+    return account;
+}
+
+async function requireInstrumentAccount(accountId: number, kind: InstrumentKind) {
+    if (kind === 'fd') return requirePortfolioHostAccount(accountId);
+    return requireInvestmentAccount(accountId);
+}
+
+export async function sumFdLockedForAccount(accountId: number): Promise<number> {
+    const instruments = await listInstrumentsForAccount(accountId);
+    let locked = 0;
+    for (const instrument of instruments) {
+        if (instrument.kind !== 'fd') continue;
+        locked += instrument.principal ?? 0;
+    }
+    return roundMoney(locked);
+}
+
+export async function sumFdLockedByAccount(): Promise<Map<number, number>> {
+    const db = requireDb();
+    const rows = await db
+        .select()
+        .from(investmentInstruments)
+        .where(and(eq(investmentInstruments.active, true), eq(investmentInstruments.kind, 'fd')));
+    const result = new Map<number, number>();
+    for (const row of rows) {
+        const principal = roundMoney(parseNum(row.principal));
+        if (principal <= 0) continue;
+        result.set(
+            row.paymentAccountId,
+            roundMoney((result.get(row.paymentAccountId) ?? 0) + principal)
+        );
+    }
+    return result;
+}
+
+/** Expenses that paid for a holding buy — their cash went into the holding. */
+export async function listInvestedExpenseIds(): Promise<Set<number>> {
+    const db = requireDb();
+    const rows = await db
+        .select({ expenseId: investmentEvents.linkedExpenseId })
+        .from(investmentEvents)
+        .where(and(eq(investmentEvents.eventType, 'buy'), isNotNull(investmentEvents.linkedExpenseId)));
+    return new Set(rows.map((row) => row.expenseId!));
 }
 
 export async function getInstrumentById(id: number): Promise<InvestmentInstrument | null> {
@@ -227,12 +316,15 @@ export async function createInstrument(fields: {
     annualRatePct?: number | null;
     startDate?: string | null;
     maturityDate?: string | null;
+    tenureMonths?: number | null;
+    cashBalance?: number;
 }): Promise<number> {
-    await requireInvestmentAccount(fields.paymentAccountId);
+    const account = await requireInstrumentAccount(fields.paymentAccountId, fields.kind);
     const name = fields.name.trim();
     if (!name) throw new Error('Instrument name is required');
     if (!isValidInstrumentKind(fields.kind)) throw new Error('Invalid instrument kind');
 
+    let maturityDate = fields.maturityDate ?? null;
     if (fields.kind === 'fd') {
         if (fields.principal == null || !Number.isFinite(fields.principal) || fields.principal < 0) {
             throw new Error('FD principal is required');
@@ -245,6 +337,28 @@ export async function createInstrument(fields: {
             throw new Error('FD annual rate is required');
         }
         if (!fields.startDate) throw new Error('FD start date is required');
+        if (
+            fields.tenureMonths != null &&
+            (!Number.isInteger(fields.tenureMonths) || fields.tenureMonths <= 0)
+        ) {
+            throw new Error('FD tenure months must be a positive integer');
+        }
+        if (fields.tenureMonths != null) {
+            maturityDate = addCalendarMonths(fields.startDate, fields.tenureMonths);
+        } else if (!maturityDate) {
+            throw new Error('FD tenure months is required');
+        }
+
+        if (account.accountType === 'account') {
+            if (fields.cashBalance == null || !Number.isFinite(fields.cashBalance)) {
+                throw new Error('Cash balance is required to allocate FD');
+            }
+            const locked = await sumFdLockedForAccount(account.id);
+            const available = roundMoney(fields.cashBalance - locked);
+            if (roundMoney(fields.principal) > available + 0.005) {
+                throw new Error(`FD principal exceeds available cash (${available.toFixed(2)})`);
+            }
+        }
     }
 
     const db = requireDb();
@@ -263,13 +377,15 @@ export async function createInstrument(fields: {
             principal:
                 fields.kind === 'fd' && fields.principal != null
                     ? String(roundMoney(fields.principal))
-                    : null,
+                    : fields.kind === 'fund'
+                      ? String(roundMoney(fields.principal ?? 0))
+                      : null,
             annualRatePct:
                 fields.kind === 'fd' && fields.annualRatePct != null
                     ? String(fields.annualRatePct)
                     : null,
             startDate: fields.kind === 'fd' ? fields.startDate ?? null : null,
-            maturityDate: fields.kind === 'fd' ? fields.maturityDate ?? null : null,
+            maturityDate: fields.kind === 'fd' ? maturityDate : null,
         })
         .returning({ id: investmentInstruments.id });
     return row.id;
@@ -313,14 +429,14 @@ export async function updateInstrument(
         }
     }
 
-    if (existing.kind === 'fd') {
+    if (existing.kind === 'fd' || existing.kind === 'fund') {
         if (fields.principal !== undefined) {
             if (fields.principal == null || !Number.isFinite(fields.principal) || fields.principal < 0) {
-                throw new Error('Invalid FD principal');
+                throw new Error(existing.kind === 'fund' ? 'Invalid invested amount' : 'Invalid FD principal');
             }
             patch.principal = String(roundMoney(fields.principal));
         }
-        if (fields.annualRatePct !== undefined) {
+        if (existing.kind === 'fd' && fields.annualRatePct !== undefined) {
             if (
                 fields.annualRatePct == null ||
                 !Number.isFinite(fields.annualRatePct) ||
@@ -330,11 +446,26 @@ export async function updateInstrument(
             }
             patch.annualRatePct = String(fields.annualRatePct);
         }
-        if (fields.startDate !== undefined) patch.startDate = fields.startDate;
-        if (fields.maturityDate !== undefined) patch.maturityDate = fields.maturityDate;
+        if (existing.kind === 'fd') {
+            if (fields.startDate !== undefined) patch.startDate = fields.startDate;
+            if (fields.maturityDate !== undefined) patch.maturityDate = fields.maturityDate;
+        }
     }
 
     if (Object.keys(patch).length === 0) return;
+    if (patch.active === false) {
+        // Deactivating a holding also unlinks the fixed bills that contribute to it (as the FK's
+        // ON DELETE SET NULL would), so they fall back to plain Investment bills in both apps
+        // instead of failing every contribution run.
+        await db.transaction(async (tx) => {
+            await tx.update(investmentInstruments).set(patch).where(eq(investmentInstruments.id, id));
+            await tx
+                .update(fixedExpenses)
+                .set({ instrumentId: null })
+                .where(eq(fixedExpenses.instrumentId, id));
+        });
+        return;
+    }
     await db.update(investmentInstruments).set(patch).where(eq(investmentInstruments.id, id));
 }
 
@@ -370,6 +501,21 @@ function positionFromLots(
     return { quantity: roundQty(quantity), costBasis: roundMoney(costBasis) };
 }
 
+function isPrincipalFund(instrument: InvestmentInstrument): boolean {
+    return instrument.kind === 'fund' && instrument.principal != null;
+}
+
+function fundPosition(instrument: InvestmentInstrument): {
+    costBasis: number;
+    marketValue: number;
+    lastPrice: number | null;
+} {
+    const costBasis = roundMoney(instrument.principal ?? 0);
+    const marketValue =
+        instrument.lastPrice != null ? roundMoney(instrument.lastPrice) : costBasis;
+    return { costBasis, marketValue, lastPrice: instrument.lastPrice };
+}
+
 function holdingMarketValue(
     instrument: InvestmentInstrument,
     quantity: number,
@@ -379,6 +525,10 @@ function holdingMarketValue(
         const principal = instrument.principal ?? 0;
         return { marketValue: roundMoney(principal), lastPrice: null };
     }
+    if (isPrincipalFund(instrument)) {
+        const pos = fundPosition(instrument);
+        return { marketValue: pos.marketValue, lastPrice: pos.lastPrice };
+    }
     const lastPrice = instrument.lastPrice;
     if (lastPrice != null) {
         return { marketValue: roundMoney(quantity * lastPrice), lastPrice };
@@ -386,14 +536,26 @@ function holdingMarketValue(
     return { marketValue: costBasis, lastPrice: null };
 }
 
-export async function sumHoldingsMarketValueByAccount(): Promise<Map<number, number>> {
+export async function sumHoldingsByAccount(): Promise<{
+    marketValue: Map<number, number>;
+    costBasis: Map<number, number>;
+    unrealizedGain: Map<number, number>;
+    names: Map<number, string[]>;
+    holdings: Map<number, AccountHoldingSummary[]>;
+}> {
     const db = requireDb();
     const instruments = await db
         .select()
         .from(investmentInstruments)
         .where(eq(investmentInstruments.active, true));
-    const result = new Map<number, number>();
-    if (instruments.length === 0) return result;
+    const marketValue = new Map<number, number>();
+    const costBasisByAccount = new Map<number, number>();
+    const unrealizedGain = new Map<number, number>();
+    const names = new Map<number, string[]>();
+    const holdings = new Map<number, AccountHoldingSummary[]>();
+    if (instruments.length === 0) {
+        return { marketValue, costBasis: costBasisByAccount, unrealizedGain, names, holdings };
+    }
 
     const ids = instruments.map((i) => i.id);
     const lots = await db
@@ -410,26 +572,56 @@ export async function sumHoldingsMarketValueByAccount(): Promise<Map<number, num
         lotsByInstrument.set(lot.instrumentId, list);
     }
 
+    const addMoney = (map: Map<number, number>, accountId: number, amount: number) => {
+        map.set(accountId, roundMoney((map.get(accountId) ?? 0) + amount));
+    };
+
     for (const row of instruments) {
         const instrument = mapInstrument(row);
         let mv = 0;
+        let costBasis = 0;
+        let gain = 0;
         if (instrument.kind === 'fd') {
-            mv = roundMoney(instrument.principal ?? 0);
+            costBasis = roundMoney(instrument.principal ?? 0);
+            mv = costBasis;
+        } else if (isPrincipalFund(instrument)) {
+            const pos = fundPosition(instrument);
+            costBasis = pos.costBasis;
+            mv = pos.marketValue;
+            gain = roundMoney(mv - costBasis);
         } else {
             const openLots = lotsByInstrument.get(instrument.id) ?? [];
-            const { quantity, costBasis } = positionFromLots(instrument, openLots);
-            mv = holdingMarketValue(instrument, quantity, costBasis).marketValue;
+            const position = positionFromLots(instrument, openLots);
+            costBasis = position.costBasis;
+            mv = holdingMarketValue(instrument, position.quantity, costBasis).marketValue;
+            gain = roundMoney(mv - costBasis);
         }
-        result.set(
-            instrument.paymentAccountId,
-            roundMoney((result.get(instrument.paymentAccountId) ?? 0) + mv)
-        );
+        addMoney(marketValue, instrument.paymentAccountId, mv);
+        addMoney(costBasisByAccount, instrument.paymentAccountId, costBasis);
+        addMoney(unrealizedGain, instrument.paymentAccountId, gain);
+        const list = names.get(instrument.paymentAccountId) ?? [];
+        list.push(instrument.name);
+        names.set(instrument.paymentAccountId, list);
+        const holdingList = holdings.get(instrument.paymentAccountId) ?? [];
+        holdingList.push({ id: instrument.id, name: instrument.name, kind: instrument.kind });
+        holdings.set(instrument.paymentAccountId, holdingList);
     }
-    return result;
+    for (const list of names.values()) {
+        list.sort((a, b) => a.localeCompare(b, 'en-MY', { sensitivity: 'base' }));
+    }
+    for (const list of holdings.values()) {
+        list.sort((a, b) => a.name.localeCompare(b.name, 'en-MY', { sensitivity: 'base' }));
+    }
+    return { marketValue, costBasis: costBasisByAccount, unrealizedGain, names, holdings };
+}
+
+export async function sumHoldingsMarketValueByAccount(): Promise<Map<number, number>> {
+    const { marketValue } = await sumHoldingsByAccount();
+    return marketValue;
 }
 
 export async function getPortfolioSummary(paymentAccountId: number): Promise<PortfolioSummary> {
-    await requireInvestmentAccount(paymentAccountId);
+    await requirePortfolioHostAccount(paymentAccountId);
     const instruments = await listInstrumentsForAccount(paymentAccountId);
     const db = requireDb();
 
@@ -452,6 +644,23 @@ export async function getPortfolioSummary(paymentAccountId: number): Promise<Por
             });
             totalCostBasis += costBasis;
             totalMarketValue += marketValue;
+            continue;
+        }
+
+        if (isPrincipalFund(instrument)) {
+            const { costBasis, marketValue, lastPrice } = fundPosition(instrument);
+            const unrealizedGain = roundMoney(marketValue - costBasis);
+            holdings.push({
+                instrument,
+                quantity: 1,
+                costBasis,
+                marketValue,
+                unrealizedGain,
+                lastPrice,
+            });
+            totalCostBasis += costBasis;
+            totalMarketValue += marketValue;
+            totalUnrealizedGain += unrealizedGain;
             continue;
         }
 
@@ -517,11 +726,14 @@ export async function recordBuy(fields: {
     quantity: number;
     unitPrice: number;
     notes?: string | null;
+    /** Brokerage / clearing / stamp; added to cash out and lot cost. */
+    fee?: number | null;
     /** When set, creates an expense on this payment method for total cost. */
     fromPaymentMethod?: string | null;
 }): Promise<{ eventId: number; lotId: number }> {
     const instrument = await requireInstrument(fields.instrumentId);
     if (instrument.kind === 'fd') throw new Error('Use FD principal fields; buys are for share lots');
+    if (instrument.kind === 'fund') throw new Error('Use unit trust invest');
     if (!Number.isFinite(fields.quantity) || fields.quantity <= 0) {
         throw new Error('Buy quantity must be positive');
     }
@@ -531,7 +743,10 @@ export async function recordBuy(fields: {
 
     const quantity = roundQty(fields.quantity);
     const unitPrice = fields.unitPrice;
-    const amount = roundMoney(quantity * unitPrice);
+    const gross = roundMoney(quantity * unitPrice);
+    const fee = parseFee(fields.fee);
+    const amount = roundMoney(gross + fee);
+    const unitCost = roundUnitCost(amount / quantity);
     const db = requireDb();
 
     let linkedExpenseId: number | null = null;
@@ -567,7 +782,7 @@ export async function recordBuy(fields: {
             openedAt: fields.date,
             quantity: String(quantity),
             remainingQty: String(quantity),
-            unitCost: String(unitPrice),
+            unitCost: String(unitCost),
             buyEventId: eventRow.id,
         })
         .returning({ id: investmentLots.id });
@@ -589,11 +804,14 @@ export async function recordSell(fields: {
     quantity: number;
     unitPrice: number;
     notes?: string | null;
+    /** Brokerage / clearing / stamp; subtracted from proceeds. */
+    fee?: number | null;
     /** When set, creates income credited to this payment method for proceeds. */
     toPaymentMethod?: string | null;
 }): Promise<{ eventId: number; realizedGain: number }> {
     const instrument = await requireInstrument(fields.instrumentId);
     if (instrument.kind === 'fd') throw new Error('FD instruments do not support share sells');
+    if (instrument.kind === 'fund') throw new Error('Use unit trust withdraw');
     if (!Number.isFinite(fields.quantity) || fields.quantity <= 0) {
         throw new Error('Sell quantity must be positive');
     }
@@ -625,7 +843,12 @@ export async function recordSell(fields: {
         remaining = roundQty(remaining - take);
     }
 
-    const proceeds = roundMoney(sellQty * unitPrice);
+    const gross = roundMoney(sellQty * unitPrice);
+    const fee = parseFee(fields.fee);
+    if (fee > gross) {
+        throw new Error('Sell fee cannot exceed proceeds');
+    }
+    const proceeds = roundMoney(gross - fee);
     const realizedGain = roundMoney(proceeds - costBasisSold);
 
     let linkedIncomeId: number | null = null;
@@ -666,6 +889,151 @@ export async function recordSell(fields: {
         .where(eq(investmentInstruments.id, instrument.id));
 
     return { eventId: eventRow.id, realizedGain };
+}
+
+/**
+ * The Investment expense a unit trust invest debits, inserted on `executor` so it joins the
+ * buy's transaction. Same columns as appendExpense (expenseService, which takes no executor);
+ * keep the two in step.
+ */
+async function insertInvestExpense(
+    executor: DbExecutor,
+    fields: { date: string; amount: number; currency: string; description: string; paymentMethod: string }
+): Promise<number> {
+    const [row] = await executor
+        .insert(expenses)
+        .values({
+            date: fields.date,
+            amount: String(fields.amount),
+            currency: fields.currency || 'MYR',
+            category: resolveCategory('Investment'),
+            description: fields.description,
+            paymentMethod: resolvePaymentMethod(fields.paymentMethod),
+        })
+        .returning({ id: expenses.id });
+    return row.id;
+}
+
+/**
+ * Writes the expense (unless `linkedExpenseId` reuses one), the principal update and the buy
+ * together: on `executor` when the caller passes its transaction (a fixed-bill contribution adds
+ * its funding transfer to it), otherwise in a transaction of its own.
+ */
+export async function recordFundInvest(
+    fields: {
+        instrumentId: number;
+        date: string;
+        amount: number;
+        notes?: string | null;
+        fromPaymentMethod?: string | null;
+        /** Reuse an expense already logged for this contribution instead of adding another. */
+        linkedExpenseId?: number | null;
+    },
+    executor?: DbExecutor
+): Promise<{ eventId: number; linkedExpenseId: number }> {
+    const instrument = await requireInstrument(fields.instrumentId);
+    if (instrument.kind !== 'fund') throw new Error('Invest is only for unit trusts');
+    if (!Number.isFinite(fields.amount) || fields.amount <= 0) {
+        throw new Error('Amount must be positive');
+    }
+    const amount = roundMoney(fields.amount);
+    const principal = roundMoney((instrument.principal ?? 0) + amount);
+    const lastPrice = roundMoney((instrument.lastPrice ?? instrument.principal ?? 0) + amount);
+    const account = await requireInvestmentAccount(instrument.paymentAccountId);
+    const debitFrom = fields.fromPaymentMethod?.trim() || account.name;
+
+    const write = async (db: DbExecutor) => {
+        const linkedExpenseId =
+            fields.linkedExpenseId ??
+            (await insertInvestExpense(db, {
+                date: fields.date,
+                amount,
+                currency: instrument.currency || 'MYR',
+                description: fields.notes?.trim() || `Invest ${instrument.name}`,
+                paymentMethod: debitFrom,
+            }));
+
+        await db
+            .update(investmentInstruments)
+            .set({
+                principal: String(principal),
+                lastPrice: String(lastPrice),
+                lastPriceAt: fields.date,
+            })
+            .where(eq(investmentInstruments.id, instrument.id));
+
+        const [eventRow] = await db
+            .insert(investmentEvents)
+            .values({
+                instrumentId: instrument.id,
+                eventType: 'buy',
+                date: fields.date,
+                amount: String(amount),
+                notes: fields.notes?.trim() || null,
+                linkedExpenseId,
+            })
+            .returning({ id: investmentEvents.id });
+        return { eventId: eventRow.id, linkedExpenseId };
+    };
+    return executor ? write(executor) : requireDb().transaction(write);
+}
+
+export async function recordFundWithdraw(fields: {
+    instrumentId: number;
+    date: string;
+    amount: number;
+    notes?: string | null;
+    toPaymentMethod?: string | null;
+}): Promise<{ eventId: number }> {
+    const instrument = await requireInstrument(fields.instrumentId);
+    if (instrument.kind !== 'fund') throw new Error('Withdraw is only for unit trusts');
+    if (!Number.isFinite(fields.amount) || fields.amount <= 0) {
+        throw new Error('Amount must be positive');
+    }
+    const amount = roundMoney(fields.amount);
+    const principal = roundMoney(instrument.principal ?? 0);
+    if (amount > principal + 0.005) {
+        throw new Error(`Amount cannot exceed invested (${principal.toFixed(2)})`);
+    }
+    const newPrincipal = roundMoney(principal - amount);
+    const currentValue = instrument.lastPrice ?? principal;
+    const newValue = roundMoney(Math.max(0, currentValue - amount));
+    const account = await requireInvestmentAccount(instrument.paymentAccountId);
+    const creditTo = fields.toPaymentMethod?.trim() || account.name;
+
+    const linkedIncomeId = await appendIncome(
+        fields.date,
+        amount,
+        instrument.currency || 'MYR',
+        'Other',
+        fields.notes?.trim() || `Withdraw ${instrument.name}`,
+        undefined,
+        undefined,
+        creditTo
+    );
+
+    const db = requireDb();
+    await db
+        .update(investmentInstruments)
+        .set({
+            principal: String(newPrincipal),
+            lastPrice: String(newValue),
+            lastPriceAt: fields.date,
+        })
+        .where(eq(investmentInstruments.id, instrument.id));
+
+    const [eventRow] = await db
+        .insert(investmentEvents)
+        .values({
+            instrumentId: instrument.id,
+            eventType: 'sell',
+            date: fields.date,
+            amount: String(amount),
+            notes: fields.notes?.trim() || null,
+            linkedIncomeId,
+        })
+        .returning({ id: investmentEvents.id });
+    return { eventId: eventRow.id };
 }
 
 export async function recordDividend(fields: {
@@ -723,7 +1091,7 @@ export async function recordInterest(fields: {
     }
     const amount = roundMoney(fields.amount);
     const syncCash = fields.syncCash !== false;
-    const account = await requireInvestmentAccount(instrument.paymentAccountId);
+    const account = await requirePortfolioHostAccount(instrument.paymentAccountId);
     const creditTo = fields.toPaymentMethod?.trim() || account.name;
 
     let linkedIncomeId: number | null = null;

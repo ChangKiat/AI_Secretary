@@ -349,6 +349,15 @@ export async function listActivePaymentAccounts(): Promise<PaymentAccount[]> {
     return rows.map(mapRow);
 }
 
+/** Active and inactive accounts; paymentMethods uses the inactive names to stop nickname matches on deactivated accounts. */
+export async function listAllPaymentAccounts(): Promise<PaymentAccount[]> {
+    const db = requireDb();
+    await ensureDefaultPaymentAccounts();
+    const rows = await db.select().from(paymentAccounts).orderBy(asc(paymentAccounts.name));
+
+    return rows.map(mapRow);
+}
+
 export async function getPaymentAccountById(id: number): Promise<PaymentAccount | null> {
     const db = requireDb();
     const rows = await db.select().from(paymentAccounts).where(eq(paymentAccounts.id, id)).limit(1);

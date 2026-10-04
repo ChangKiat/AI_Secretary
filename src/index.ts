@@ -35,7 +35,7 @@ import {
 } from './config/gemini';
 import { documentExpensePrompt } from './config/prompts';
 import { loadExpenseCategories } from './config/expenseCategories';
-import { loadPaymentAccounts } from './config/paymentMethods';
+import { loadPaymentAccounts, resolvePaymentMethod } from './config/paymentMethods';
 import {
     getMealById,
     updateProteinTarget,
@@ -171,18 +171,21 @@ async function main() {
                         exp.description,
                         exp.paymentMethod
                     );
-                    if (
-                        exp.category.toLowerCase() === 'investment' &&
-                        exp.paymentMethod &&
-                        exp.toInvestmentAccount
-                    ) {
+                    // getFixedExpensesForToday now returns display text (raw for an account that no longer
+                    // resolves). Add the transfer only when both accounts resolve, as before the sync, so one
+                    // stale bill can't throw and stop the rest of today's bills. 3.2/3.5 replace this loop.
+                    const fundingFrom = resolvePaymentMethod(exp.paymentMethod);
+                    const fundingTo = resolvePaymentMethod(exp.toInvestmentAccount);
+                    const isInvestment = exp.category.toLowerCase() === 'investment';
+                    const transferWritten = isInvestment && !!fundingFrom && !!fundingTo;
+                    if (transferWritten) {
                         await upsertInvestmentFundingTransfer({
                             expenseId,
                             date: exp.date,
                             amount: exp.amount,
                             description: exp.description,
-                            fromPaymentMethod: exp.paymentMethod,
-                            toInvestmentAccount: exp.toInvestmentAccount,
+                            fromPaymentMethod: fundingFrom,
+                            toInvestmentAccount: fundingTo,
                         });
                     }
                     let loanNote = '';
@@ -196,8 +199,18 @@ async function main() {
                             loanNote = ` · interest ${applied.interest.toFixed(2)} / principal ${applied.principal.toFixed(2)} / left ${applied.remainingAfter.toFixed(2)}`;
                         }
                     }
-                    const via = exp.paymentMethod ? ` via ${exp.paymentMethod}` : '';
-                    const toFund = exp.toInvestmentAccount ? ` → ${exp.toInvestmentAccount}` : '';
+                    // Say only what was stored: appendExpense saved the resolved account (none for a stale
+                    // name), and the transfer exists only when both accounts resolved.
+                    const via = fundingFrom
+                        ? ` via ${fundingFrom}`
+                        : exp.paymentMethod
+                          ? ` (account '${exp.paymentMethod}' not found, logged without account)`
+                          : '';
+                    const toFund = transferWritten
+                        ? ` → ${fundingTo}`
+                        : isInvestment && exp.toInvestmentAccount && !fundingTo
+                          ? ` (transfer to '${exp.toInvestmentAccount}' skipped: account not found)`
+                          : '';
                     loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount}${via}${toFund}${loanNote})`;
                 }
 

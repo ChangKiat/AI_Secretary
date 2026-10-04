@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     trip_leg TEXT,
     fx_amount NUMERIC(12, 2),
     fx_currency TEXT,
-    fx_rate NUMERIC(12, 6),
+    fx_rate NUMERIC(20, 12),
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -44,6 +44,7 @@ INSERT INTO budgets (category, monthly_budget) VALUES
     ('Insurance', 1000),
     ('Utility', 1000),
     ('Travel', 1000),
+    ('Bank charges', 50),
     ('Other', 1000)
 ON CONFLICT (category) DO NOTHING;
 
@@ -58,6 +59,9 @@ CREATE TABLE IF NOT EXISTS incomes (
     expense_id INTEGER REFERENCES expenses(id),
     payment_method TEXT,
     from_payment_method TEXT,
+    transfer_fee NUMERIC(12, 2),
+    rebate_period_month TEXT,
+    rebate_category TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -117,6 +121,8 @@ CREATE TABLE IF NOT EXISTS payment_accounts (
     initial_balance NUMERIC(12, 2) NOT NULL DEFAULT 0,
     balance_baseline_date TEXT NOT NULL DEFAULT TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD'),
     credit_limit NUMERIC(12, 2),
+    statement_day INTEGER,
+    rebate_config JSONB,
     active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -174,7 +180,10 @@ CREATE TABLE IF NOT EXISTS user_settings (
     daily_fat_target_g NUMERIC(8, 2) NOT NULL DEFAULT 70,
     timezone TEXT NOT NULL DEFAULT 'Asia/Kuala_Lumpur',
     salary_after_tax NUMERIC(12, 2) NOT NULL DEFAULT 0,
-    body_weight_kg NUMERIC(6, 2)
+    body_weight_kg NUMERIC(6, 2),
+    height_cm NUMERIC(6, 2),
+    age INTEGER,
+    sex TEXT
 );
 
 CREATE TABLE IF NOT EXISTS investment_instruments (
@@ -226,3 +235,58 @@ CREATE INDEX IF NOT EXISTS idx_investment_events_instrument
     ON investment_events(instrument_id);
 CREATE INDEX IF NOT EXISTS idx_investment_lots_instrument
     ON investment_lots(instrument_id);
+
+-- Columns that reference tables created above, so they cannot sit inline in
+-- incomes / fixed_expenses (those tables are created before payment_accounts
+-- and investment_instruments).
+ALTER TABLE incomes
+    ADD COLUMN IF NOT EXISTS rebate_account_id INTEGER REFERENCES payment_accounts(id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS incomes_rebate_unique
+    ON incomes (rebate_account_id, rebate_period_month, rebate_category)
+    WHERE rebate_account_id IS NOT NULL;
+
+ALTER TABLE fixed_expenses
+    ADD COLUMN IF NOT EXISTS instrument_id INTEGER REFERENCES investment_instruments(id) ON DELETE SET NULL;
+
+-- Health: weigh-ins and daily steps (one row per user per day)
+CREATE TABLE IF NOT EXISTS body_weight_logs (
+    id SERIAL PRIMARY KEY,
+    telegram_user_id BIGINT NOT NULL,
+    date TEXT NOT NULL,
+    weight_kg NUMERIC(6, 2) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT body_weight_logs_user_date UNIQUE (telegram_user_id, date)
+);
+
+CREATE TABLE IF NOT EXISTS daily_activity_logs (
+    id SERIAL PRIMARY KEY,
+    telegram_user_id BIGINT NOT NULL,
+    date TEXT NOT NULL,
+    steps INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT daily_activity_logs_user_date UNIQUE (telegram_user_id, date)
+);
+
+-- Car service log (Dashboard Car tab)
+CREATE TABLE IF NOT EXISTS car_service_visits (
+    id SERIAL PRIMARY KEY,
+    date TEXT NOT NULL,
+    odometer_km INTEGER NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS car_service_items (
+    id SERIAL PRIMARY KEY,
+    visit_id INTEGER NOT NULL REFERENCES car_service_visits(id) ON DELETE CASCADE,
+    category TEXT NOT NULL DEFAULT 'Material',
+    description TEXT NOT NULL,
+    amount NUMERIC(12, 2) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS car_service_items_visit_id_idx
+    ON car_service_items(visit_id);
+CREATE INDEX IF NOT EXISTS car_service_visits_date_idx
+    ON car_service_visits(date);

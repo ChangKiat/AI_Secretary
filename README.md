@@ -37,11 +37,46 @@ For `DATABASE_URL`, open Supabase → **Project Settings → Database** and copy
 
 ### 3. Create database tables
 
-In the Supabase SQL Editor, run the contents of [`scripts/init-db.sql`](scripts/init-db.sql).
+The bot and the Dashboard share one database, and all of its SQL lives in `scripts/` in this repo. Run it in the Supabase SQL Editor.
 
-- **New database:** run `scripts/init-db.sql`.
-- **Upgrading an existing database:** run the missing `scripts/migrate-*.sql` files.
+- **New database:** run [`scripts/init-db.sql`](scripts/init-db.sql). It creates every table, column, index and default row that the bot and the Dashboard use, and is safe to run twice.
+- **Upgrading an existing database:** run only the `scripts/migrate-*.sql` files you are missing, in the order below.
 - **Never run `drizzle-kit push` against the shared database.** It drops columns, tables and indexes that the Dashboard relies on (the Agent and Dashboard share one DB).
+
+#### Upgrading an existing database
+
+Back up first (Supabase → Database → Backups, or `pg_dump`). Check which columns and tables already exist, then run only the missing scripts, top to bottom. Most use `IF NOT EXISTS` and are harmless to repeat; the notes in bold mark the ones that are not.
+
+1. `migrate-nutrition-targets.sql`: calorie, carb and fat targets on `user_settings`.
+2. `migrate-duration-min.sql`: fractional `workouts.duration_min`. **No guard:** run it only if `duration_min` is still `integer`.
+3. `migrate-budgets-categories.sql`: **LEGACY / DESTRUCTIVE.** Drops and recreates `budgets`, resetting every budget. Only for a DB whose `budgets` table still has `month/amount` columns; the script does nothing otherwise. Must run before 17 and 24.
+4. `migrate-salary-after-tax.sql`: `user_settings.salary_after_tax`.
+5. `migrate-workout-burn.sql`: workout calories and fat burned, `user_settings.body_weight_kg`.
+6. `migrate-incomes.sql`: `incomes` table.
+7. `migrate-workout-sessions.sql`: workout session columns.
+8. `migrate-payment-method.sql`: `expenses.payment_method`.
+9. `migrate-fixed-expense-payment-method.sql`: `fixed_expenses.payment_method`.
+10. `migrate-income-payment-accounts.sql`: payment accounts on `incomes`. Needs 6.
+11. `migrate-payment-accounts.sql`: `payment_accounts` table. **Not repeatable:** it seeds 9 default accounts, so a re-run re-adds any default you renamed or deleted.
+12. `migrate-account-balances.sql`: opening balance, credit limit, baseline date. Needs 11.
+13. `migrate-fixed-expense-to-investment.sql`: `fixed_expenses.to_investment_account`.
+14. `migrate-workout-progressive.sql`: per-set weights and superset groups.
+15. `migrate-statement-day.sql`: credit card statement day. Needs 11.
+16. `migrate-rebate.sql`: cashback config and rebate income columns. Needs 6 and 11.
+17. `migrate-trips.sql`: `trips` table and FX columns on `expenses`. Needs the per-category `budgets` (3). **Not repeatable:** it re-adds the Travel budget if you deleted or renamed it.
+18. `migrate-investment-portfolio.sql`: investment instruments, events and lots. Needs 6 and 11.
+19. `migrate-interest-schedules.sql`: `interest_schedules` table.
+20. `migrate-loan-installments.sql`: loan columns on `fixed_expenses`, `loan_payments` and its unique index.
+21. `migrate-fixed-expense-instrument.sql`: `fixed_expenses.instrument_id` (read by the 9am fixed-bill cron). Needs 18.
+22. `migrate-body-weight-logs.sql`: `body_weight_logs` (used by `log_body_weight`). Needs 5. **Not repeatable:** it inserts today's weigh-in from `user_settings.body_weight_kg` unless today already has one.
+23. `migrate-car-service.sql`: `car_service_visits` and `car_service_items` (Dashboard Car tab).
+24. `migrate-transfer-fee.sql`: `incomes.transfer_fee`. Needs 3. **Not repeatable:** it re-adds the Bank charges budget if no budget of that name exists (in any letter case).
+25. `migrate-daily-activity.sql`: `user_settings.height_cm/age/sex` and `daily_activity_logs`.
+26. `migrate-fx-rate-precision.sql`: widens `expenses.fx_rate` to `numeric(20,12)`. Needs 17. **Run it manually before deploying** any build whose `schema.ts` declares the wider `fx_rate`.
+
+The Dashboard repo keeps one optional personal seed, `Dashboard/scripts/seed-car-service-visits.sql`. Run it once, after 23; a re-run skips visits that already exist.
+
+If a script inserted rows (accounts or budgets), restart the bot and the Dashboard, because they load accounts and categories at startup.
 
 ### 4. Supabase Storage (optional, for meal photos)
 
@@ -111,8 +146,9 @@ src/
   tools/        # Gemini function declarations + handlers
   index.ts      # Telegram bot entry point
 scripts/
-  init-db.sql
-  migrate-sheets-to-db.ts
+  init-db.sql               # Full schema for a new DB (bot + Dashboard)
+  migrate-*.sql             # Upgrades for an existing DB (full list and run order in step 3)
+  migrate-sheets-to-db.ts   # One-time Google Sheets import
 ```
 
 ## Cloud deployment

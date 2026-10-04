@@ -7,7 +7,7 @@ import {
     type ExpenseTripFields,
     type SkippedExpense,
 } from './expenseService';
-import { getLatestExchangeRate, listTrips, type Trip } from './tripService';
+import { exchangeRateOf, getLatestExchangeRate, listTrips, type Trip } from './tripService';
 
 const HOME_CURRENCY = 'MYR';
 
@@ -155,7 +155,13 @@ function isCash(paymentMethod: string | null): boolean {
  * - MYR marked as trip spending → plain row grouped into the trip
  */
 export function planTripExpense(
-    item: { amount: number; currency: string; paymentMethod: string | null; tripExpense?: boolean },
+    item: {
+        amount: number;
+        currency: string;
+        paymentMethod: string | null;
+        paymentMethodText?: string | null;
+        tripExpense?: boolean;
+    },
     trip: Trip | null,
     exchangeRate: number | null
 ): TripExpensePlan {
@@ -184,6 +190,14 @@ export function planTripExpense(
         return {
             kind: 'skip',
             reason: `${trip.name} has no exchange yet — add one in the Dashboard, then resend`,
+        };
+    }
+    // An account name that doesn't resolve (e.g. ambiguous "rhb") would otherwise be read as cash.
+    const typed = item.paymentMethodText?.trim();
+    if (!item.paymentMethod && typed && !isCash(typed)) {
+        return {
+            kind: 'skip',
+            reason: `couldn't match payment account "${typed}" — use the exact account name, then resend`,
         };
     }
     const cash = isCash(item.paymentMethod);
@@ -279,6 +293,8 @@ export interface ExpenseLogInput {
     category: string;
     description: string;
     paymentMethod: string | null;
+    /** What the user typed for the account, before resolving (null/empty = not given). */
+    paymentMethodText?: string | null;
     tripExpense?: boolean;
 }
 
@@ -324,7 +340,13 @@ export async function logExpenseWithTrip(
 
     const rate = trip && currency === trip.tripCurrency && currency !== HOME_CURRENCY ? await lookup.rate(trip.id) : null;
     const plan = planTripExpense(
-        { amount, currency, paymentMethod: input.paymentMethod, tripExpense: input.tripExpense },
+        {
+            amount,
+            currency,
+            paymentMethod: input.paymentMethod,
+            paymentMethodText: input.paymentMethodText,
+            tripExpense: input.tripExpense,
+        },
         trip,
         rate
     );
@@ -376,13 +398,23 @@ export async function logExpenseWithTrip(
 }
 
 /**
- * Correcting the amount on a trip-currency row (fund/card leg): a trip-currency amount
- * keeps the row's rate, an MYR amount keeps the foreign amount and re-derives the rate.
+ * Correcting the amount on a trip-currency row (fund/card leg). A trip-currency amount is
+ * re-converted: fund legs at `tripRate` (the trip's latest exchange rate) when given, card legs
+ * at the rate actually charged (MYR amount ÷ foreign amount), which is also the fund fallback.
+ * The stored fx_rate is only a last resort, because older rows kept just 6 decimals.
+ * An MYR amount keeps the foreign amount and re-derives the rate.
  */
 export function recomputeTripLegAmount(
-    row: { amount: number; fxAmount: number | null; fxCurrency: string | null; fxRate: number | null },
+    row: {
+        amount: number;
+        fxAmount: number | null;
+        fxCurrency: string | null;
+        fxRate: number | null;
+        tripLeg?: string | null;
+    },
     newAmount: number,
-    newCurrency: string | undefined
+    newCurrency: string | undefined,
+    tripRate?: number | null
 ): { amount: number; currency: string; fxAmount: number; fxRate: number } | { error: string } {
     const { fxAmount, fxCurrency } = row;
     if (fxAmount == null || !(fxAmount > 0) || !fxCurrency) {
@@ -391,7 +423,11 @@ export function recomputeTripLegAmount(
     if (!(newAmount > 0)) return { error: 'the new amount must be positive' };
     const currency = newCurrency?.trim().toUpperCase() || fxCurrency;
     if (currency === fxCurrency) {
-        const rate = row.fxRate != null && row.fxRate > 0 ? row.fxRate : row.amount / fxAmount;
+        const useTripRate = row.tripLeg !== 'card' && tripRate != null && tripRate > 0;
+        const rate = useTripRate ? tripRate : exchangeRateOf(row);
+        if (rate == null || !(rate > 0)) {
+            return { error: `this trip expense has no exchange rate — give the amount in ${HOME_CURRENCY}` };
+        }
         return { amount: round2(newAmount * rate), currency: HOME_CURRENCY, fxAmount: newAmount, fxRate: rate };
     }
     if (currency === HOME_CURRENCY) {
@@ -480,6 +516,18 @@ if (require.main === module) {
         linked.kind === 'trip' && linked.fields.tripLeg === undefined && linked.amount === 20 && linked.paymentMethod === 'Cash',
         `RM trip item → grouped into trip: ${JSON.stringify(linked)}`
     );
+    const unmatched = planTripExpense(
+        { amount: 250_000, currency: 'VND', paymentMethod: null, paymentMethodText: 'rhb' },
+        trip,
+        rate
+    );
+    assert(unmatched.kind === 'skip', `unmatched account on a trip is skipped, not filed as cash: ${JSON.stringify(unmatched)}`);
+    const typedCash = planTripExpense(
+        { amount: 32_000, currency: 'VND', paymentMethod: null, paymentMethodText: 'cash' },
+        trip,
+        rate
+    );
+    assert(typedCash.kind === 'trip' && typedCash.fields.tripLeg === 'fund', 'typed "cash" still lands as a fund leg');
     const homeBill = planTripExpense({ amount: 41.9, currency: 'MYR', paymentMethod: 'RHB World Card' }, trip, rate);
     assert(homeBill.kind === 'plain', 'RM item not marked tripExpense stays off the trip');
     const noRate = planTripExpense({ amount: 32_000, currency: 'VND', paymentMethod: null }, trip, null);
@@ -498,12 +546,23 @@ if (require.main === module) {
     );
     assert(chance.length === 0, 'VND 30k ≈ RM4.80 is not a duplicate of an unrelated RM4.80 row');
 
-    const fundRow = { amount: 5.12, fxAmount: 32_000, fxCurrency: 'VND', fxRate: rate };
+    const fundRow = { amount: 5.12, fxAmount: 32_000, fxCurrency: 'VND', fxRate: rate, tripLeg: 'fund' };
     const fixedVnd = recomputeTripLegAmount(fundRow, 40_000, 'VND');
     assert('fxAmount' in fixedVnd && fixedVnd.fxAmount === 40_000 && fixedVnd.amount === 6.4, `edit 40k → ${JSON.stringify(fixedVnd)}`);
     const fixedMyr = recomputeTripLegAmount(fundRow, 6, 'MYR');
     assert('fxAmount' in fixedMyr && fixedMyr.fxAmount === 32_000 && fixedMyr.amount === 6, `edit rm6 → ${JSON.stringify(fixedMyr)}`);
     assert('error' in recomputeTripLegAmount(fundRow, 5, 'USD'), 'other currency edit is rejected');
+
+    // RM400 for VND 2,450,000 is 0.000163265…/VND; fx_rate used to keep only 0.000163.
+    const vndRate = 400 / 2_450_000;
+    const vndFund = { amount: round2(1_000_000 * vndRate), fxAmount: 1_000_000, fxCurrency: 'VND', fxRate: 0.000163, tripLeg: 'fund' };
+    const doubled = recomputeTripLegAmount(vndFund, 2_000_000, 'VND', vndRate);
+    assert('fxAmount' in doubled && doubled.amount === 326.53, `VND 1m → 2m at the trip rate → ${JSON.stringify(doubled)}`);
+    const noTripRate = recomputeTripLegAmount(vndFund, 2_000_000, 'VND', null);
+    assert('fxAmount' in noTripRate && noTripRate.amount !== 326, `no trip rate never uses the 6-decimal fx_rate → ${JSON.stringify(noTripRate)}`);
+    const vndCard = { amount: 41, fxAmount: 250_000, fxCurrency: 'VND', fxRate: 0.000163, tripLeg: 'card' };
+    const cardEdit = recomputeTripLegAmount(vndCard, 500_000, 'VND', vndRate);
+    assert('fxAmount' in cardEdit && cardEdit.amount === 82, `card leg keeps its charged rate → ${JSON.stringify(cardEdit)}`);
 
     console.log('tripExpenseService self-check ok');
 }

@@ -103,7 +103,11 @@ export function suggestedInstallmentAmount(input: {
 }): number | null {
     const principal = input.originalPrincipal;
     const n = input.tenureMonths;
-    if (input.method === 'included' || !(principal > 0) || n < 1) return null;
+    if (!(principal > 0) || n < 1) return null;
+
+    if (input.method === 'included') {
+        return roundMoney(principal / n);
+    }
 
     const rate = Math.max(0, input.annualRatePct);
     if (input.method === 'flat') {
@@ -153,7 +157,7 @@ export function loanColumnsForCategory(
             loan.loanMethod === 'included' || loan.annualRatePct == null
                 ? null
                 : String(loan.annualRatePct),
-        tenureMonths: loan.loanMethod === 'included' ? null : (loan.tenureMonths ?? null),
+        tenureMonths: loan.tenureMonths ?? null,
         loanStartDate: loan.loanMethod === 'included' ? null : (loan.loanStartDate ?? null),
     };
 }
@@ -352,6 +356,16 @@ if (require.main === module) {
     });
     if (emi !== 888.49) {
         throw new Error(`EMI helper failed: ${emi}`);
+    }
+
+    const includedSuggested = suggestedInstallmentAmount({
+        method: 'included',
+        originalPrincipal: 21_840,
+        annualRatePct: 0,
+        tenureMonths: 12,
+    });
+    if (includedSuggested !== 1820) {
+        throw new Error(`included EMI failed: ${includedSuggested}`);
     }
 
     const included = computeInstallmentSplit({

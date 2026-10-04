@@ -110,7 +110,7 @@ function buildGetSummaryDeclaration(): FunctionDeclaration {
     return {
         name: 'get_spending_summary',
         description:
-            'Retrieves total spending (net after reimbursements), gross spent, reimbursements, income received, category breakdown, breakdownByPaymentMethod, and budget vs net spent per category. Defaults to current month.',
+            'Retrieves total spending (net after reimbursements), gross spent, reimbursements, income received, category breakdown, breakdownByPaymentMethod, and budget vs net spent per category. Defaults to the current calendar month (including post-dated rows).',
         parameters: {
             type: SchemaType.OBJECT,
             properties: {

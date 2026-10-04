@@ -18,7 +18,7 @@ import {
     SkippedExpense,
 } from '../services/expenseService';
 import { logExpenseWithTrip, recomputeTripLegAmount, TripLookup } from '../services/tripExpenseService';
-import { getTripById } from '../services/tripService';
+import { getLatestExchangeRate, getTripById } from '../services/tripService';
 import {
     appendIncome,
     appendReimbursements,
@@ -63,7 +63,7 @@ import {
     deleteWorkoutsBySessionId,
     WorkoutLogEntry,
 } from '../services/gymService';
-import { estimateBurn, burnFromReportedCalories } from '../services/burnCalculator';
+import { resolveWorkoutBurn } from '../services/burnCalculator';
 import {
     logMeal,
     getNutritionSummary,
@@ -231,17 +231,17 @@ async function buildWorkoutEntry(
     bodyWeightKg: number | null
 ): Promise<WorkoutLogEntry> {
     const normalized = normalizeWeightsKg(args.weightsKg, args.weightKg, args.sets);
-    const burn =
-        args.caloriesBurned != null && args.caloriesBurned > 0
-            ? burnFromReportedCalories(args.caloriesBurned)
-            : estimateBurn(
-                  args.exercise,
-                  args.durationMin,
-                  normalized.sets,
-                  args.reps,
-                  normalized.topWeightKg,
-                  bodyWeightKg
-              );
+    const burn = resolveWorkoutBurn(
+        {
+            exercise: args.exercise,
+            durationMin: args.durationMin,
+            sets: normalized.sets,
+            reps: args.reps,
+            topWeightKg: normalized.topWeightKg,
+            caloriesBurned: args.caloriesBurned,
+        },
+        bodyWeightKg
+    );
 
     return {
         date,
@@ -388,6 +388,7 @@ export async function handleToolCall(
                 category: resolvedCategory,
                 description: args.description,
                 paymentMethod: resolvePaymentMethod(args.paymentMethod),
+                paymentMethodText: args.paymentMethod,
                 tripExpense: args.tripExpense,
             },
             options?.tripLookup ?? new TripLookup()
@@ -537,7 +538,12 @@ export async function handleToolCall(
         };
         const isTripCurrencyRow = existing.tripLeg === 'fund' || existing.tripLeg === 'card';
         if (isTripCurrencyRow && args.amount != null) {
-            const recomputed = recomputeTripLegAmount(existing, args.amount, args.currency);
+            // Fund legs are cash bought at the trip's exchange rate; card legs keep their charged rate.
+            const tripRate =
+                existing.tripLeg === 'fund' && existing.tripId != null
+                    ? await getLatestExchangeRate(existing.tripId)
+                    : null;
+            const recomputed = recomputeTripLegAmount(existing, args.amount, args.currency, tripRate);
             if ('error' in recomputed) {
                 await chat.sendMessage([
                     {
@@ -1183,6 +1189,7 @@ export async function handleToolCall(
                     category: resolveCategory(item.category),
                     description: item.description?.trim() || 'Expense',
                     paymentMethod: resolvePaymentMethod(item.paymentMethod),
+                    paymentMethodText: item.paymentMethod,
                     tripExpense: item.tripExpense,
                 },
                 lookup

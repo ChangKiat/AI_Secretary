@@ -19,6 +19,9 @@ export interface NutritionTargets {
     dailyFatTargetG: number;
     timezone: string;
     bodyWeightKg: number | null;
+    heightCm: number | null;
+    age: number | null;
+    sex: 'male' | 'female' | null;
 }
 
 export interface DayMacros {
@@ -46,7 +49,27 @@ function parseSettingsRow(row: typeof userSettings.$inferSelect): NutritionTarge
         dailyFatTargetG: parseFloat(row.dailyFatTargetG),
         timezone: row.timezone,
         bodyWeightKg: row.bodyWeightKg ? parseFloat(row.bodyWeightKg) : null,
+        heightCm: row.heightCm ? parseFloat(row.heightCm) : null,
+        age: row.age ?? null,
+        sex: row.sex === 'male' || row.sex === 'female' ? row.sex : null,
     };
+}
+
+/** Mifflin-St Jeor resting energy expenditure; null if any input is missing. */
+export function computeBMR(
+    weightKg: number | null,
+    heightCm: number | null,
+    age: number | null,
+    sex: 'male' | 'female' | null
+): number | null {
+    if (weightKg == null || heightCm == null || age == null || sex == null) return null;
+    const base = 10 * weightKg + 6.25 * heightCm - 5 * age;
+    return sex === 'male' ? base + 5 : base - 161;
+}
+
+/** ~0.0005 kcal/step/kg approximates published per-step energy cost across body weights. */
+export function caloriesFromSteps(steps: number, weightKg: number | null): number {
+    return steps * (weightKg ?? 70) * 0.0005;
 }
 
 function getSupabase() {
@@ -83,6 +106,9 @@ export async function getOrCreateUserSettings(telegramUserId: number): Promise<N
         dailyFatTargetG: DEFAULT_FAT_TARGET,
         timezone: 'Asia/Kuala_Lumpur',
         bodyWeightKg: null,
+        heightCm: null,
+        age: null,
+        sex: null,
     };
 }
 
@@ -104,13 +130,16 @@ export async function updateNutritionTargets(
             | 'dailyCarbsTargetG'
             | 'dailyFatTargetG'
             | 'bodyWeightKg'
+            | 'heightCm'
+            | 'age'
+            | 'sex'
         >
     >
 ) {
     const db = requireDb();
     await getOrCreateUserSettings(telegramUserId);
 
-    const set: Record<string, string | null> = {};
+    const set: Record<string, string | number | null> = {};
     if (targets.dailyProteinTargetG != null) {
         set.dailyProteinTargetG = String(targets.dailyProteinTargetG);
     }
@@ -126,6 +155,19 @@ export async function updateNutritionTargets(
     if (targets.bodyWeightKg !== undefined) {
         set.bodyWeightKg =
             targets.bodyWeightKg != null ? String(targets.bodyWeightKg) : null;
+    }
+    if (targets.heightCm !== undefined) {
+        set.heightCm = targets.heightCm != null ? String(targets.heightCm) : null;
+    }
+    if (targets.age !== undefined) {
+        // user_settings.age is INTEGER; a fractional age (e.g. 30.5) would fail the insert.
+        set.age = targets.age != null ? Math.round(targets.age) : null;
+    }
+    if (
+        targets.sex !== undefined &&
+        (targets.sex === 'male' || targets.sex === 'female' || targets.sex === null)
+    ) {
+        set.sex = targets.sex;
     }
 
     if (Object.keys(set).length > 0) {
@@ -528,6 +570,9 @@ if (require.main === module) {
             dailyFatTargetG: 70,
             timezone: 'Asia/Kuala_Lumpur',
             bodyWeightKg: null,
+            heightCm: null,
+            age: null,
+            sex: null,
         }
     );
     const bulk = formatBulkMealLogReply(

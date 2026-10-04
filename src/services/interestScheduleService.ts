@@ -1,8 +1,9 @@
 import { and, desc, eq, lte } from 'drizzle-orm';
 import { resolvePaymentMethod } from '../config/paymentMethods';
 import { requireDb } from '../db/client';
-import { expenses, incomes, interestSchedules } from '../db/schema';
-import { appendIncome } from './incomeService';
+import { expenses, incomes, interestSchedules, investmentInstruments } from '../db/schema';
+import { lastDayOfMonth } from './fixedSchedule';
+import { appendIncome, parseStoredTransferFee } from './incomeService';
 import {
     listActivePaymentAccounts,
     type PaymentAccount,
@@ -126,15 +127,56 @@ function isOnOrAfterBaseline(date: string, account: PaymentAccount): boolean {
     return date >= baseline;
 }
 
-async function getAccountBalanceAsOf(accountName: string, asOfDate: string): Promise<number> {
+/** Sum of FD principals, same rounding as the Dashboard's sumFdLockedByAccount (non-positive principals skipped). */
+function sumFdPrincipal(principals: (string | null)[]): number {
+    let locked = 0;
+    for (const value of principals) {
+        const principal = roundMoney(parseNum(value));
+        if (principal <= 0) continue;
+        locked = roundMoney(locked + principal);
+    }
+    return locked;
+}
+
+/**
+ * Cash the Dashboard shows as locked in FDs on this account: every active kind='fd' instrument,
+ * no start/maturity date filter (Dashboard definition, see sumFdLockedByAccount).
+ */
+async function getFdLockedForAccount(accountId: number): Promise<number> {
+    const db = requireDb();
+    const rows = await db
+        .select({ principal: investmentInstruments.principal })
+        .from(investmentInstruments)
+        .where(
+            and(
+                eq(investmentInstruments.paymentAccountId, accountId),
+                eq(investmentInstruments.active, true),
+                eq(investmentInstruments.kind, 'fd')
+            )
+        );
+    return sumFdPrincipal(rows.map((row) => row.principal));
+}
+
+/** Cash that earns savings interest: running balance minus FD-locked principal, never below 0. */
+function interestBearingBalance(cashBalance: number, fdLocked: number): number {
+    return Math.max(0, roundMoney(cashBalance - fdLocked));
+}
+
+/**
+ * Interest-bearing balance of a bank account after every row dated on or before `asOfDate`:
+ * the running cash balance (an Account transfer's fee is debited from its from-account, as on the
+ * Dashboard) minus the account's active FD principal, clamped at 0.
+ */
+async function getInterestBearingBalanceAsOf(accountName: string, asOfDate: string): Promise<number> {
     const accounts = await listActivePaymentAccounts();
     const account = accounts.find((a) => a.name.toLowerCase() === accountName.toLowerCase());
     if (!account || account.accountType !== 'account') return 0;
 
     const db = requireDb();
-    const [expenseRows, incomeRows] = await Promise.all([
+    const [expenseRows, incomeRows, fdLocked] = await Promise.all([
         db.select().from(expenses).where(lte(expenses.date, asOfDate)),
         db.select().from(incomes).where(lte(incomes.date, asOfDate)),
+        getFdLockedForAccount(account.id),
     ]);
 
     const accountByName = new Map(
@@ -172,7 +214,7 @@ async function getAccountBalanceAsOf(accountName: string, asOfDate: string): Pro
             const fromAccount = getAccountByStoredName(income.fromPaymentMethod);
             const toAccount = getAccountByStoredName(income.paymentMethod);
             if (fromAccount?.id === account.id && isOnOrAfterBaseline(income.date, account)) {
-                debitDelta -= amount;
+                debitDelta -= amount + parseStoredTransferFee(income.transferFee);
             }
             if (toAccount?.id === account.id && isOnOrAfterBaseline(income.date, account)) {
                 debitDelta += amount;
@@ -186,7 +228,7 @@ async function getAccountBalanceAsOf(accountName: string, asOfDate: string): Pro
         debitDelta += amount;
     }
 
-    return account.initialBalance + debitDelta;
+    return interestBearingBalance(account.initialBalance + debitDelta, fdLocked);
 }
 
 async function getLastInterestDate(
@@ -340,13 +382,28 @@ export async function deactivateInterestScheduleByDescription(
     return true;
 }
 
+/** Monthly schedule due date: day 29-31 falls on the last day of a shorter month (month is 1-based). */
+function isMonthlyScheduleDue(
+    dayOfMonth: number | null,
+    year: number,
+    month: number,
+    day: number
+): boolean {
+    if (dayOfMonth == null) return false;
+    return day === Math.min(dayOfMonth, lastDayOfMonth(year, month));
+}
+
 export async function getInterestSchedulesForToday(): Promise<InterestScheduleRow[]> {
     const today = todayInKL();
-    const todayDay = today.getDate();
     const rows = await getActiveInterestSchedules();
     return rows.filter((row) => {
         if (row.frequency === 'daily') return true;
-        return row.dayOfMonth === todayDay;
+        return isMonthlyScheduleDue(
+            row.dayOfMonth,
+            today.getFullYear(),
+            today.getMonth() + 1,
+            today.getDate()
+        );
     });
 }
 
@@ -363,7 +420,7 @@ export async function computeInterestAmount(
     }
 
     const balanceDate = subtractDays(accrualDate, 1);
-    const balance = await getAccountBalanceAsOf(schedule.paymentMethod, balanceDate);
+    const balance = await getInterestBearingBalanceAsOf(schedule.paymentMethod, balanceDate);
     if (balance <= 0) return null;
 
     let days: number;
@@ -425,4 +482,31 @@ export async function accrueInterestForSchedule(
     );
 
     return { incomeId, amount };
+}
+
+// ponytail self-check: pure helpers only, no DB
+if (require.main === module) {
+    const check = (actual: unknown, expected: unknown, label: string) => {
+        if (actual !== expected) throw new Error(`${label}: expected ${expected}, got ${actual}`);
+    };
+    check(isMonthlyScheduleDue(31, 2026, 2, 28), true, 'day 31 falls on 28 Feb 2026');
+    check(isMonthlyScheduleDue(31, 2028, 2, 28), false, 'day 31 waits for 29 Feb 2028');
+    check(isMonthlyScheduleDue(31, 2028, 2, 29), true, 'day 31 on 29 Feb 2028');
+    check(isMonthlyScheduleDue(31, 2026, 11, 30), true, 'day 31 on 30 Nov');
+    check(isMonthlyScheduleDue(30, 2026, 11, 30), true, 'day 30 on 30 Nov');
+    check(isMonthlyScheduleDue(31, 2026, 12, 30), false, 'day 31 not on 30 Dec');
+    check(isMonthlyScheduleDue(31, 2026, 12, 31), true, 'day 31 on 31 Dec');
+    check(isMonthlyScheduleDue(15, 2026, 2, 15), true, 'day 15 unchanged');
+    check(isMonthlyScheduleDue(15, 2026, 2, 28), false, 'day 15 not on month end');
+    check(isMonthlyScheduleDue(null, 2026, 2, 28), false, 'missing day never due');
+    check(sumFdPrincipal(['30000.00', '4000', null, '0', '-5', 'x']), 34000, 'FD sum skips null/0/negative');
+    check(sumFdPrincipal(['0.1', '0.2']), 0.3, 'FD sum rounds to cents');
+    check(sumFdPrincipal([]), 0, 'no FDs');
+    check(interestBearingBalance(50000, 30000), 20000, 'cash minus FD');
+    check(interestBearingBalance(3000, 4000), 0, 'FD above cash clamps to 0');
+    check(interestBearingBalance(-100, 0), 0, 'overdrawn clamps to 0');
+    check(interestBearingBalance(1234.567, 0), 1234.57, 'rounded to cents');
+    // plan 2.14 example: 50,000 cash with a 30,000 FD at 3% → RM1.64/day, not RM4.11/day
+    check(roundMoney((interestBearingBalance(50000, 30000) * 3) / (100 * 365)), 1.64, 'daily interest on unlocked cash');
+    console.log('interestScheduleService self-check ok');
 }

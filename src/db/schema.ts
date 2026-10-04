@@ -22,7 +22,8 @@ export const expenses = pgTable('expenses', {
     tripLeg: text('trip_leg'),
     fxAmount: numeric('fx_amount', { precision: 12, scale: 2 }),
     fxCurrency: text('fx_currency'),
-    fxRate: numeric('fx_rate', { precision: 12, scale: 6 }),
+    /** numeric(20,12) after AI Agent/scripts/migrate-fx-rate-precision.sql (small rates such as VND to MYR need the extra digits). */
+    fxRate: numeric('fx_rate', { precision: 20, scale: 12 }),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
@@ -37,6 +38,8 @@ export const incomes = pgTable('incomes', {
     expenseId: integer('expense_id').references(() => expenses.id),
     paymentMethod: text('payment_method'),
     fromPaymentMethod: text('from_payment_method'),
+    /** Extra debited from from_payment_method on Account transfer (fee on top of amount). */
+    transferFee: numeric('transfer_fee', { precision: 12, scale: 2 }),
     rebateAccountId: integer('rebate_account_id').references(() => paymentAccounts.id),
     rebatePeriodMonth: text('rebate_period_month'),
     rebateCategory: text('rebate_category'),
@@ -158,6 +161,10 @@ export const userSettings = pgTable('user_settings', {
     timezone: text('timezone').default('Asia/Kuala_Lumpur').notNull(),
     salaryAfterTax: numeric('salary_after_tax', { precision: 12, scale: 2 }).default('0').notNull(),
     bodyWeightKg: numeric('body_weight_kg', { precision: 6, scale: 2 }),
+    heightCm: numeric('height_cm', { precision: 6, scale: 2 }),
+    age: integer('age'),
+    /** 'male' | 'female', used for BMR calculation. */
+    sex: text('sex'),
 });
 
 export const bodyWeightLogs = pgTable(
@@ -170,6 +177,18 @@ export const bodyWeightLogs = pgTable(
         createdAt: timestamp('created_at').defaultNow().notNull(),
     },
     (t) => [unique('body_weight_logs_user_date').on(t.telegramUserId, t.date)]
+);
+
+export const dailyActivityLogs = pgTable(
+    'daily_activity_logs',
+    {
+        id: serial('id').primaryKey(),
+        telegramUserId: bigint('telegram_user_id', { mode: 'number' }).notNull(),
+        date: text('date').notNull(),
+        steps: integer('steps').notNull(),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+    },
+    (t) => [unique('daily_activity_logs_user_date').on(t.telegramUserId, t.date)]
 );
 
 /** equity | fund | fd | other */
@@ -220,5 +239,25 @@ export const investmentLots = pgTable('investment_lots', {
     remainingQty: numeric('remaining_qty', { precision: 18, scale: 8 }).notNull(),
     unitCost: numeric('unit_cost', { precision: 12, scale: 6 }).notNull(),
     buyEventId: integer('buy_event_id').references(() => investmentEvents.id),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+/** Material | Lubricants | Labour | Other */
+export const carServiceVisits = pgTable('car_service_visits', {
+    id: serial('id').primaryKey(),
+    date: text('date').notNull(),
+    odometerKm: integer('odometer_km').notNull(),
+    notes: text('notes'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const carServiceItems = pgTable('car_service_items', {
+    id: serial('id').primaryKey(),
+    visitId: integer('visit_id')
+        .notNull()
+        .references(() => carServiceVisits.id, { onDelete: 'cascade' }),
+    category: text('category').default('Material').notNull(),
+    description: text('description').notNull(),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });

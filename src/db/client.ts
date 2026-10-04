@@ -81,7 +81,10 @@ if (!connectionString) {
 
 
 
-const client = connectionString ? postgres(connectionString) : null;
+// Supabase's transaction pooler (port 6543) does not support prepared statements.
+const client = connectionString
+    ? postgres(connectionString, { prepare: new URL(connectionString).port !== '6543' })
+    : null;
 
 export const db = client ? drizzle(client, { schema }) : null;
 
