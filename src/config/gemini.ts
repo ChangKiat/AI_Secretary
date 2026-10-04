@@ -44,6 +44,10 @@ export function createPlannerModel(
     );
 }
 
+/**
+ * Reads the account/category caches now (tool descriptions + prompt), so a model built here goes
+ * stale when refreshFinanceCaches() sees new names; index.ts rebuilds its models on that event.
+ */
 export function createDomainModel(
     genAI: GoogleGenerativeAI,
     domain: SpecialistDomain,

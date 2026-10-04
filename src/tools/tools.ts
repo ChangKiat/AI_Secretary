@@ -59,11 +59,38 @@ function buildLogExpenseDeclaration(): FunctionDeclaration {
                     type: SchemaType.STRING,
                     description: getExpensePaymentMethodDescription(),
                 },
+                toInvestmentAccount: toInvestmentAccountParam(),
+                dashboardNote: dashboardNoteParam,
             },
             required: ['amount', 'currency', 'category', 'description'],
         },
     };
 }
+
+/**
+ * 3.13: the "record the rest on the Dashboard" note for a Dashboard-only item. The handler adds it to
+ * the confirmation, because the model's own text is not shown once a tool is called.
+ */
+const dashboardNoteParam = {
+    type: SchemaType.STRING,
+    description:
+        'Only for Dashboard-only items (base rule 6), e.g. a car service visit or a share/ETF/FD trade: what the user still has to record on the Dashboard and where (e.g. "Add the 45,000km service visit in the Dashboard Car tab"). Never say it was recorded. Omit otherwise.',
+} as const;
+
+/** 3.3: the account an Investment expense credits (written as a linked Account transfer). */
+function toInvestmentAccountParam(): { type: SchemaType.STRING; description: string } {
+    return {
+        type: SchemaType.STRING,
+        description: `Only for category Investment: the investment account the money went to (paymentMethod is the account it came from; both are required). ${getPaymentMethodDescription()}`,
+    };
+}
+
+/** 3.4: an Account transfer's fee, stored on the transfer (counted as Bank charges spending). */
+const transferFeeParam = {
+    type: SchemaType.NUMBER,
+    description:
+        'Only for Account transfer: fee debited from the from-account on top of amount. Do NOT log a separate Bank charges expense.',
+} as const;
 
 function buildLogIncomeDeclaration(): FunctionDeclaration {
     return {
@@ -100,6 +127,8 @@ function buildLogIncomeDeclaration(): FunctionDeclaration {
                     description:
                         'From account (source). Required for Account transfer category when moving between accounts.',
                 },
+                transferFee: transferFeeParam,
+                dashboardNote: dashboardNoteParam,
             },
             required: ['amount', 'category', 'description'],
         },
@@ -110,7 +139,7 @@ function buildGetSummaryDeclaration(): FunctionDeclaration {
     return {
         name: 'get_spending_summary',
         description:
-            'Retrieves total spending (net after reimbursements), gross spent, reimbursements, income received, category breakdown, breakdownByPaymentMethod, and budget vs net spent per category. Defaults to the current calendar month (including post-dated rows).',
+            'Retrieves total spending (net after reimbursements), gross spent, reimbursements, income received, category breakdown, breakdownByPaymentMethod, and budget vs net spent per category. Totals include Account-transfer fees as "Bank charges" (under the from-account). Defaults to the current calendar month (including post-dated rows).',
         parameters: {
             type: SchemaType.OBJECT,
             properties: {
@@ -127,11 +156,91 @@ function buildGetSummaryDeclaration(): FunctionDeclaration {
     };
 }
 
+function buildLogCurrencyExchangeDeclaration(): FunctionDeclaration {
+    return {
+        name: 'log_currency_exchange',
+        description:
+            'Logs MYR exchanged into a trip\'s foreign currency (money changer, bank FX), e.g. "exchanged RM500 to 2.7m VND". It funds the trip cash on the trip board, and its rate converts later trip-currency cash and card spending to MYR. Never use log_expense for an exchange. In a message that also lists trip spending, call this first.',
+        parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+                myrAmount: { type: SchemaType.NUMBER, description: 'MYR paid for the foreign currency.' },
+                foreignAmount: {
+                    type: SchemaType.NUMBER,
+                    description: 'Foreign currency received, as a full number ("2.7m" → 2700000).',
+                },
+                foreignAmountText: {
+                    type: SchemaType.STRING,
+                    description:
+                        'The received amount exactly as the user typed it, e.g. "2.7m", "2,700,000 vnd", "300 usd".',
+                },
+                foreignCurrency: {
+                    type: SchemaType.STRING,
+                    description: 'Optional. Currency code received, e.g. VND, THB. Omit if not stated.',
+                },
+                paymentMethod: {
+                    type: SchemaType.STRING,
+                    description: `Account the MYR came from: Cash when MYR cash was handed to a money changer, otherwise the bank account. ${getExpensePaymentMethodDescription()}`,
+                },
+                tripName: {
+                    type: SchemaType.STRING,
+                    description:
+                        'Optional. Trip name from [TRIPS] when the user names a trip; otherwise the trip is picked by date and currency.',
+                },
+                date: {
+                    type: SchemaType.STRING,
+                    description: 'YYYY-MM-DD the money was exchanged. Default today if omitted.',
+                },
+            },
+            required: ['myrAmount', 'foreignAmount'],
+        },
+    };
+}
+
+export const createTripDeclaration: FunctionDeclaration = {
+    name: 'create_trip',
+    description:
+        'Creates a trip on the trip board (the Dashboard Trips panel), e.g. "create trip Vietnam 10-15 Oct, VND". Spending in the trip currency dated inside the trip is then converted to MYR and put on the trip. Only when the user asks to create or add a trip.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            name: { type: SchemaType.STRING, description: 'Trip name, e.g. Vietnam, Company Trip Danang.' },
+            tripCurrency: {
+                type: SchemaType.STRING,
+                description: '3-letter code of the currency spent there, e.g. VND, THB, JPY (MYR for a local trip).',
+            },
+            startDate: { type: SchemaType.STRING, description: 'First day, YYYY-MM-DD.' },
+            endDate: { type: SchemaType.STRING, description: 'Last day (inclusive), YYYY-MM-DD.' },
+            notes: { type: SchemaType.STRING, description: 'Optional note.' },
+        },
+        required: ['name', 'tripCurrency', 'startDate', 'endDate'],
+    },
+};
+
+export const getTripSummaryDeclaration: FunctionDeclaration = {
+    name: 'get_trip_summary',
+    description:
+        'Totals for one trip as the Dashboard Trips panel shows them: total spent (spentMyr) and per day, exchanged, fund left/used in the trip currency, card, linked RM spending, total cost (tripTotalMyr) and spending by category. Use for "how much did I spend in Vietnam / on the trip" instead of get_spending_summary. Without tripName it uses the trip covering the date (default today), else the latest trip.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            tripName: {
+                type: SchemaType.STRING,
+                description: 'Optional. Trip name (from [TRIPS] or as the user said it).',
+            },
+            date: {
+                type: SchemaType.STRING,
+                description: 'Optional. YYYY-MM-DD inside the trip, when the user gives a date instead of a name.',
+            },
+        },
+    },
+};
+
 function buildAddFixedExpenseDeclaration(): FunctionDeclaration {
     return {
         name: 'add_fixed_expense',
         description:
-            'Saves a new RECURRING or FIXED bill. Use this ANY TIME the user says "every month", "fixed", "recurring", "quarterly", or "yearly".',
+            'Saves a new RECURRING or FIXED bill. Use this ANY TIME the user says "every month", "fixed", "recurring", "quarterly", or "yearly". An Investment bill needs paymentMethod (the account it is paid from) plus holding or toInvestmentAccount (where the money goes).',
         parameters: {
             type: SchemaType.OBJECT,
             properties: {
@@ -148,7 +257,16 @@ function buildAddFixedExpenseDeclaration(): FunctionDeclaration {
                 description: { type: SchemaType.STRING, description: 'Auto-generate a brief description.' },
                 paymentMethod: {
                     type: SchemaType.STRING,
-                    description: getExpensePaymentMethodDescription(),
+                    description: `The account the bill is paid from. ${getExpensePaymentMethodDescription()}`,
+                },
+                toInvestmentAccount: {
+                    type: SchemaType.STRING,
+                    description: `Only for category Investment (required unless holding is set) or Other (optional: a monthly move between your own accounts): the account the money goes to. ${getPaymentMethodDescription()}`,
+                },
+                holding: {
+                    type: SchemaType.STRING,
+                    description:
+                        'Only for category Investment: the unit trust this bill buys into, by its name in [HOLDINGS] (e.g. "PRS"). Its investment account becomes the destination and the monthly buy is recorded on the holding.',
                 },
             },
             required: ['dayOfMonth', 'amount'],
@@ -195,24 +313,94 @@ function buildLogBulkExpensesDeclaration(): FunctionDeclaration {
     };
 }
 
-export const updateFixedExpenseDeclaration: FunctionDeclaration = {
-    name: 'update_fixed_expense',
-    description:
-        'Updates the price or amount of an existing recurring monthly bill (e.g., changing Netflix from 55 to 60).',
-    parameters: {
-        type: SchemaType.OBJECT,
-        properties: {
-            description: { type: SchemaType.STRING, description: 'The name of the subscription or bill to update (e.g., "Netflix", "Gym").',
+const fundHoldingParam = {
+    type: SchemaType.STRING,
+    description: 'The unit trust, by its name in [HOLDINGS] (e.g. "PRS", "Semi Con").',
+} as const;
+
+const fundDateParam = {
+    type: SchemaType.STRING,
+    description: 'YYYY-MM-DD when it happened. Defaults to today if omitted.',
+} as const;
+
+function buildInvestInFundDeclaration(): FunctionDeclaration {
+    return {
+        name: 'invest_in_fund',
+        description:
+            'Records a top-up / buy into a unit trust listed in [HOLDINGS] ("topped up RM200 into PRS from Maybank"). It logs the Investment expense AND grows the holding, so never also call log_expense for it.',
+        parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+                holding: fundHoldingParam,
+                amount: { type: SchemaType.NUMBER, description: 'Amount invested in MYR.' },
+                date: fundDateParam,
+                fromPaymentMethod: {
+                    type: SchemaType.STRING,
+                    description: `The account the money came from. Use the holding's own investment account only when the user says it was paid from cash already on that platform. Ask if not stated. ${getPaymentMethodDescription()}`,
+                },
             },
-            newAmount: { type: SchemaType.NUMBER, description: 'The new cost or amount.' },
+            required: ['holding', 'amount'],
         },
-        required: ['description', 'newAmount'],
-    },
-};
+    };
+}
+
+function buildWithdrawFromFundDeclaration(): FunctionDeclaration {
+    return {
+        name: 'withdraw_from_fund',
+        description:
+            'Records money taken out of (redeemed / sold from) a unit trust listed in [HOLDINGS] ("withdrew RM500 from Semi Con to Maybank"). It reduces the holding and logs the money received.',
+        parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+                holding: fundHoldingParam,
+                amount: { type: SchemaType.NUMBER, description: 'Amount withdrawn in MYR.' },
+                date: fundDateParam,
+                toPaymentMethod: {
+                    type: SchemaType.STRING,
+                    description: `The account the money went to. Use the holding's own investment account only when the user says it stayed as cash on that platform. Ask if not stated. ${getPaymentMethodDescription()}`,
+                },
+            },
+            required: ['holding', 'amount'],
+        },
+    };
+}
+
+// A build function (not a const) because it embeds the payment-account lists; see EXPENSE_DECLARATIONS.
+function buildUpdateFixedExpenseDeclaration(): FunctionDeclaration {
+    return {
+        name: 'update_fixed_expense',
+        description:
+            'Changes an existing recurring bill: its amount (e.g. Netflix 55 → 60), day of month, paying account or destination account. Identify the bill by id (from get_all_fixed_expenses) or by description; use the id when several bills share a description. For a Loan bill the amount is the monthly installment.',
+        parameters: {
+            type: SchemaType.OBJECT,
+            properties: {
+                id: {
+                    type: SchemaType.INTEGER,
+                    description: 'Optional. The bill id from get_all_fixed_expenses. Preferred over description.',
+                },
+                description: {
+                    type: SchemaType.STRING,
+                    description: 'The name of the subscription or bill to update (e.g., "Netflix", "Gym"), when no id is known.',
+                },
+                newAmount: { type: SchemaType.NUMBER, description: 'Optional. The new cost or amount.' },
+                dayOfMonth: { type: SchemaType.INTEGER, description: 'Optional. The new day of the month (1-31).' },
+                paymentMethod: {
+                    type: SchemaType.STRING,
+                    description: `Optional. The new account the bill is paid from. ${getExpensePaymentMethodDescription()}`,
+                },
+                toInvestmentAccount: {
+                    type: SchemaType.STRING,
+                    description: `Optional, only for Investment or Other bills: the new account the money goes to. ${getPaymentMethodDescription()}`,
+                },
+            },
+        },
+    };
+}
 
 export const getAllFixedExpensesDeclaration: FunctionDeclaration = {
     name: 'get_all_fixed_expenses',
-    description: 'Retrieves a list of all currently active recurring/fixed bills. Use this when the user asks "what are my fixed expenses" or "show me my subscriptions".',
+    description:
+        'Retrieves all active recurring/fixed bills with id, category, amount, day, from account (paymentMethod), destination (toInvestmentAccount), unit trust holding (instrumentName) and whether this month\'s buy is recorded (contributedThisMonth), and loan method and remaining balance. Use this when the user asks "what are my fixed expenses" or "show me my subscriptions".',
     parameters: { type: SchemaType.OBJECT, properties: {} },
 };
 
@@ -325,6 +513,7 @@ function buildEditExpenseDeclaration(): FunctionDeclaration {
                     type: SchemaType.STRING,
                     description: getExpensePaymentMethodDescription(),
                 },
+                toInvestmentAccount: toInvestmentAccountParam(),
             },
         },
     };
@@ -374,6 +563,7 @@ function buildEditIncomeDeclaration(): FunctionDeclaration {
                     type: SchemaType.STRING,
                     description: 'From account (Account transfer).',
                 },
+                transferFee: transferFeeParam,
             },
         },
     };
@@ -754,7 +944,7 @@ export const deleteWorkoutDeclaration: FunctionDeclaration = {
 export const getWorkoutSummaryDeclaration: FunctionDeclaration = {
     name: 'get_workout_summary',
     description:
-        'Gets workout sessions and total calories/fat burned for a date range. Use ONLY when the user asks how much they burned (e.g. "how many calories did I burn today"). Do NOT use when the user sends a workout photo or reports a new exercise—use log_workout instead.',
+        'Gets calories burned for a date range as two labelled figures: workoutCaloriesBurned (logged workouts only) and totalEnergyBurned (workouts + steps + BMR resting burn, the Dashboard "calories burned" total), with a per-day breakdown (days), totalStepCalories and bmrPerDay, plus workout sessions and fat burned. Use ONLY when the user asks how much they burned (e.g. "how many calories did I burn today"). Do NOT use when the user sends a workout photo or reports a new exercise—use log_workout instead.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -767,7 +957,8 @@ export const getWorkoutSummaryDeclaration: FunctionDeclaration = {
 
 export const updateUserSettingsDeclaration: FunctionDeclaration = {
     name: 'update_user_settings',
-    description: 'Updates daily nutrition targets and/or body weight for calorie burn estimates.',
+    description:
+        'Updates daily nutrition targets and/or profile stats (body weight, height, age, sex). Weight + height + age + sex give the BMR (resting kcal/day) used in the Dashboard "calories burned". Use for "I\'m 175cm, 30, male", "set my weight to 80kg" (also logs today\'s weigh-in), or new macro goals. Pass ONLY the fields the user stated—omit the rest.',
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -775,7 +966,18 @@ export const updateUserSettingsDeclaration: FunctionDeclaration = {
             dailyCalorieTarget: { type: SchemaType.NUMBER, description: 'Daily calorie goal.' },
             dailyCarbsTargetG: { type: SchemaType.NUMBER, description: 'Daily carbs goal in grams.' },
             dailyFatTargetG: { type: SchemaType.NUMBER, description: 'Daily fat goal in grams.' },
-            bodyWeightKg: { type: SchemaType.NUMBER, description: 'User body weight in kg for workout burn calculations.' },
+            bodyWeightKg: {
+                type: SchemaType.NUMBER,
+                description: 'User body weight in kg, for workout burn, step calories and BMR. Also logged as today\'s weigh-in.',
+            },
+            heightCm: { type: SchemaType.NUMBER, description: 'Height in centimetres (1.75 m → 175).' },
+            age: { type: SchemaType.INTEGER, description: 'Age in whole years.' },
+            sex: {
+                type: SchemaType.STRING,
+                format: 'enum',
+                enum: ['male', 'female'],
+                description: 'Sex for the BMR formula: male or female.',
+            },
         },
     },
 };
@@ -794,6 +996,23 @@ export const logBodyWeightDeclaration: FunctionDeclaration = {
             },
         },
         required: ['weightKg'],
+    },
+};
+
+export const logStepsDeclaration: FunctionDeclaration = {
+    name: 'log_steps',
+    description:
+        'Saves a day\'s total step count from a phone/watch ("9,800 steps today", "10k steps yesterday"). Replaces any count already saved for that day (it does not add). Steps are NOT a workout—never log them with log_workout.',
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            steps: { type: SchemaType.INTEGER, description: 'Total steps for the day, e.g. 9800 for "9.8k steps".' },
+            date: {
+                type: SchemaType.STRING,
+                description: 'YYYY-MM-DD. Defaults to today if omitted.',
+            },
+        },
+        required: ['steps'],
     },
 };
 
@@ -849,7 +1068,11 @@ export const routeRequestDeclaration: FunctionDeclaration = {
     },
 };
 
-const EXPENSE_DECLARATIONS: FunctionDeclaration[] = [
+// EXPENSE_DECLARATIONS and FINANCE_CONFIG_DECLARATIONS are functions, built on every
+// getDomainDeclarations/getAllFunctionDeclarations call: their build*Declaration() entries embed
+// the payment-account and category lists, which refreshFinanceCaches() reloads while the bot runs.
+// A static array here would freeze the empty-cache fallback text from module load.
+const EXPENSE_DECLARATIONS = (): FunctionDeclaration[] => [
     buildLogExpenseDeclaration(),
     buildLogIncomeDeclaration(),
     buildEditExpenseDeclaration(),
@@ -858,11 +1081,16 @@ const EXPENSE_DECLARATIONS: FunctionDeclaration[] = [
     deleteIncomeDeclaration,
     buildGetSummaryDeclaration(),
     buildLogBulkExpensesDeclaration(),
+    buildLogCurrencyExchangeDeclaration(),
+    createTripDeclaration,
+    getTripSummaryDeclaration,
+    buildInvestInFundDeclaration(),
+    buildWithdrawFromFundDeclaration(),
 ];
 
-const FINANCE_CONFIG_DECLARATIONS: FunctionDeclaration[] = [
+const FINANCE_CONFIG_DECLARATIONS = (): FunctionDeclaration[] => [
     buildAddFixedExpenseDeclaration(),
-    updateFixedExpenseDeclaration,
+    buildUpdateFixedExpenseDeclaration(),
     getAllFixedExpensesDeclaration,
     deleteFixedExpenseDeclaration,
     buildAddInterestScheduleDeclaration(),
@@ -900,6 +1128,7 @@ const WORKOUT_DECLARATIONS: FunctionDeclaration[] = [
     suggestWorkoutDeclaration,
     getWorkoutSummaryDeclaration,
     updateUserSettingsDeclaration,
+    logStepsDeclaration,
 ];
 
 export function getPlannerDeclarations(): FunctionDeclaration[] {
@@ -909,9 +1138,9 @@ export function getPlannerDeclarations(): FunctionDeclaration[] {
 export function getDomainDeclarations(domain: SpecialistDomain): FunctionDeclaration[] {
     switch (domain) {
         case 'expense':
-            return EXPENSE_DECLARATIONS;
+            return EXPENSE_DECLARATIONS();
         case 'financeConfig':
-            return FINANCE_CONFIG_DECLARATIONS;
+            return FINANCE_CONFIG_DECLARATIONS();
         case 'meal':
             return MEAL_DECLARATIONS;
         case 'calendar':
@@ -923,8 +1152,8 @@ export function getDomainDeclarations(domain: SpecialistDomain): FunctionDeclara
 
 export function getAllFunctionDeclarations(): FunctionDeclaration[] {
     return [
-        ...EXPENSE_DECLARATIONS,
-        ...FINANCE_CONFIG_DECLARATIONS,
+        ...EXPENSE_DECLARATIONS(),
+        ...FINANCE_CONFIG_DECLARATIONS(),
         ...CALENDAR_DECLARATIONS,
         ...WORKOUT_DECLARATIONS,
         ...MEAL_DECLARATIONS.filter((d) => d.name !== 'update_user_settings'),

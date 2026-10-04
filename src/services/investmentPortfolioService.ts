@@ -6,6 +6,7 @@ import {
     investmentEvents,
     investmentInstruments,
     investmentLots,
+    paymentAccounts,
 } from '../db/schema';
 import { resolveCategory } from '../config/expenseCategories';
 import { resolvePaymentMethod } from '../config/paymentMethods';
@@ -303,6 +304,114 @@ export async function listInstrumentsForAccount(
         )
         .orderBy(asc(investmentInstruments.name));
     return rows.map(mapInstrument);
+}
+
+/** An active unit trust (kind 'fund') on an active investment account, named with that account. */
+export interface FundHolding {
+    id: number;
+    name: string;
+    accountName: string;
+    /** Invested amount (principal), 0 when unset. */
+    principal: number;
+}
+
+/** Active unit trusts whose investment account is also active: the ones invest/withdraw accept. */
+export async function listActiveFundHoldings(): Promise<FundHolding[]> {
+    const db = requireDb();
+    const rows = await db
+        .select({
+            id: investmentInstruments.id,
+            name: investmentInstruments.name,
+            principal: investmentInstruments.principal,
+            accountName: paymentAccounts.name,
+        })
+        .from(investmentInstruments)
+        .innerJoin(paymentAccounts, eq(paymentAccounts.id, investmentInstruments.paymentAccountId))
+        .where(
+            and(
+                eq(investmentInstruments.active, true),
+                eq(investmentInstruments.kind, 'fund'),
+                eq(paymentAccounts.active, true),
+                eq(paymentAccounts.accountType, 'investment')
+            )
+        );
+    return rows
+        .map((row) => ({
+            id: row.id,
+            name: row.name,
+            accountName: row.accountName,
+            principal: roundMoney(parseNum(row.principal)),
+        }))
+        .sort(
+            (a, b) =>
+                a.name.localeCompare(b.name, 'en-MY', { sensitivity: 'base' }) ||
+                a.accountName.localeCompare(b.accountName, 'en-MY', { sensitivity: 'base' })
+        );
+}
+
+export type FundHoldingLookup = { match: FundHolding } | { candidates: FundHolding[] };
+
+/** Words that say "a fund" without naming one ("my PRS fund", "into the Semi Con holding"). */
+const FUND_NOISE_TOKENS = new Set(['a', 'an', 'the', 'my', 'into', 'in', 'fund', 'funds', 'holding', 'holdings', 'account']);
+
+function fundTokens(text: string): string[] {
+    return text
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((t) => t.length > 0);
+}
+
+/**
+ * Picks the unit trust a user named, from `funds` (pure; findFundInstrumentByName loads them).
+ * Order, case-insensitive, first tier with a hit wins:
+ * 1. the fund name exactly ("prs"), or name plus account ("PRS (Public Mutual)", "Public Mutual PRS");
+ * 2. every word (minus filler like "my", "fund") equals or, from 3 letters, starts a word of the fund's
+ *    name or account ("retire" → Retirement Plan, "stashaway semi" → Semi Con), or the words run
+ *    together start the name ("semicon"). Funds hit through their own name beat funds hit only
+ *    through their account, so "Public Mutual" alone lists that account's funds.
+ * One hit → { match }; several → { candidates } (ask which); none → { candidates: [] }.
+ */
+export function matchFundHolding(input: string, funds: FundHolding[]): FundHoldingLookup {
+    const query = fundTokens(input);
+    if (query.length === 0) return { candidates: funds };
+    const joined = query.join(' ');
+    const pick = (hits: FundHolding[]): FundHoldingLookup | null => {
+        if (hits.length === 1) return { match: hits[0] };
+        return hits.length > 1 ? { candidates: hits } : null;
+    };
+
+    const exactName = pick(funds.filter((f) => fundTokens(f.name).join(' ') === joined));
+    if (exactName) return exactName;
+    const exactLabel = pick(
+        funds.filter((f) => {
+            const name = fundTokens(f.name).join(' ');
+            const account = fundTokens(f.accountName).join(' ');
+            return joined === `${name} ${account}` || joined === `${account} ${name}`;
+        })
+    );
+    if (exactLabel) return exactLabel;
+
+    const meaningful = query.filter((t) => !FUND_NOISE_TOKENS.has(t));
+    const words = meaningful.length > 0 ? meaningful : query;
+    const compact = words.join('');
+    const hitsWord = (t: string, tokens: string[]) =>
+        tokens.some((x) => x === t || (t.length >= 3 && x.startsWith(t)));
+    const byName: FundHolding[] = [];
+    const byAccountOnly: FundHolding[] = [];
+    for (const fund of funds) {
+        const nameTokens = fundTokens(fund.name);
+        const labelTokens = [...nameTokens, ...fundTokens(fund.accountName)];
+        const runTogether = compact.length >= 3 && nameTokens.join('').startsWith(compact);
+        if (!runTogether && !words.every((t) => hitsWord(t, labelTokens))) continue;
+        if (runTogether || words.some((t) => hitsWord(t, nameTokens))) byName.push(fund);
+        else byAccountOnly.push(fund);
+    }
+    return pick(byName) ?? pick(byAccountOnly) ?? { candidates: [] };
+}
+
+/** The active unit trust the user named: { match }, or { candidates } to ask about (empty = none). */
+export async function findFundInstrumentByName(name: string): Promise<FundHoldingLookup> {
+    return matchFundHolding(name, await listActiveFundHoldings());
 }
 
 export async function createInstrument(fields: {
@@ -1230,4 +1339,42 @@ export async function accrueFdInterest(
         syncCash: options?.syncCash,
     });
     return { eventId, amount };
+}
+
+// ponytail self-check: pure, no DB queries (matchFundHolding only)
+if (require.main === module) {
+    const funds: FundHolding[] = [
+        { id: 21, name: 'PRS', accountName: 'Public Mutual', principal: 1510 },
+        { id: 18, name: 'Retirement Plan', accountName: 'StashAway', principal: 9083.34 },
+        { id: 17, name: 'Semi Con', accountName: 'StashAway', principal: 1200 },
+        { id: 20, name: 'Unit Trust', accountName: 'Public Mutual', principal: 14409.67 },
+        { id: 30, name: 'Growth', accountName: 'Public Mutual', principal: 0 },
+        { id: 31, name: 'Growth', accountName: 'StashAway', principal: 0 },
+    ];
+    const ids = (input: string): string => {
+        const result = matchFundHolding(input, funds);
+        return 'match' in result
+            ? `=${result.match.id}`
+            : result.candidates.map((f) => f.id).join(',');
+    };
+    const expect = (input: string, want: string) => {
+        const got = ids(input);
+        if (got !== want) {
+            throw new Error(`investmentPortfolioService self-check: "${input}" → ${got}, want ${want}`);
+        }
+    };
+    expect('prs', '=21');
+    expect('my PRS fund', '=21');
+    expect('Unit Trust', '=20');
+    expect('unit trust fund', '=20');
+    expect('retire', '=18');
+    expect('stashaway semi', '=17');
+    expect('semicon', '=17');
+    expect('PRS (Public Mutual)', '=21');
+    expect('Public Mutual', '21,20,30');
+    expect('growth', '30,31');
+    expect('StashAway Growth', '=31');
+    expect('ASNB', '');
+    expect('', '21,18,17,20,30,31');
+    console.log('investmentPortfolioService self-check ok');
 }

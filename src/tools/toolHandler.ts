@@ -2,12 +2,16 @@ import { Context } from 'telegraf';
 import { randomUUID } from 'crypto';
 import { ChatSession, FunctionCall } from '@google/generative-ai';
 import { resolveCategory, upsertBudget, getBudgets } from '../config/expenseCategories';
-import { resolvePaymentMethod } from '../config/paymentMethods';
+import {
+    displayPaymentMethod,
+    getExpensePaymentAccountNames,
+    getPaymentAccountNames,
+    resolvePaymentMethod,
+    type PaymentMethodMatch,
+} from '../config/paymentMethods';
+import { resolvePaymentMethodMatchFresh } from '../config/cacheRefresh';
 import {
     getSpendingSummary,
-    addFixedExpense,
-    updateFixedExpensePrice,
-    getAllFixedExpenses,
     deleteFixedExpense,
     formatExpenseLogReply,
     formatBulkExpenseLogReply,
@@ -17,8 +21,21 @@ import {
     ExpenseBatchEntry,
     SkippedExpense,
 } from '../services/expenseService';
-import { logExpenseWithTrip, recomputeTripLegAmount, TripLookup } from '../services/tripExpenseService';
-import { getLatestExchangeRate, getTripById } from '../services/tripService';
+import {
+    asSentence,
+    formatCurrencyExchangeReply,
+    formatTripCreatedReply,
+    formatTripSummaryReply,
+    logCurrencyExchange,
+    logExpenseWithTrip,
+    pickSummaryTrip,
+    planNewTrip,
+    recomputeTripLegAmount,
+    TRIP_SUMMARY_WORDING,
+    TripLookup,
+    tripSummaryView,
+} from '../services/tripExpenseService';
+import { createTrip, getLatestExchangeRate, getTripById, getTripSummary, listTrips } from '../services/tripService';
 import {
     appendIncome,
     appendReimbursements,
@@ -29,6 +46,15 @@ import {
     deleteIncome,
     getIncomeById,
     ReplyRecordTarget,
+    deleteInvestmentFundingTransfer,
+    fundingDestination,
+    getIncomesByExpenseId,
+    isAccountTransferCategory,
+    isInvestmentCategory,
+    isOtherCategory,
+    normalizeOtherAccounts,
+    upsertInvestmentFundingTransfer,
+    validateFundingAccounts,
 } from '../services/incomeService';
 import {
     addInterestSchedule,
@@ -80,6 +106,34 @@ import {
     MealBatchEntry,
 } from '../services/nutritionService';
 import { upsertBodyWeightLog, getRecentBodyWeightLogs } from '../services/bodyWeightService';
+import {
+    getDailyBurnSeries,
+    listDailyActivityLogs,
+    upsertDailyActivityLog,
+} from '../services/dailyActivityService';
+import {
+    bmrOf,
+    buildWorkoutSummaryResponse,
+    formatStepsReply,
+    formatUserSettingsReply,
+    isIsoDate,
+    missingBmrFields,
+    parseStepCount,
+    parseUserSettingsArgs,
+    stepCalories,
+    touchesBmrProfile,
+    type UserSettingsArgs,
+} from './healthToolHelpers';
+import {
+    addFixedExpenseTool,
+    investInFundTool,
+    listFixedExpensesTool,
+    updateFixedExpenseTool,
+    withdrawFromFundTool,
+    type AddFixedExpenseArgs,
+    type FundMoveArgs,
+    type UpdateFixedExpenseArgs,
+} from './fixedFundHandlers';
 
 export type ToolCallResult = 'complete' | 'awaiting_input';
 
@@ -176,6 +230,105 @@ export async function replyInChunks(ctx: Context, text: string): Promise<void> {
         chunk = chunk ? `${chunk}\n${line}` : line;
     }
     if (chunk) await ctx.reply(chunk);
+}
+
+/** "cash", "in cash", "paid by cash", "tunai": never treated as an unknown account (3.2). */
+const CASH_ACCOUNT_TEXT = /^(?:(?:paid|pay|by|in|with|using|via)\s+)*(?:cash|tunai)(?:\s+(?:payment|money))?$/i;
+
+type AccountCheck =
+    | { ok: true; name: string | null; text?: string }
+    | { ok: false; input: string; match: PaymentMethodMatch; candidates: string[] };
+type AccountMiss = Extract<AccountCheck, { ok: false }>;
+
+/**
+ * 3.2: resolves an account the user named, so a tool never silently stores "no account".
+ * - Empty: ok, null (not stated).
+ * - A cash variant: the active Cash account, or null when there is none (no warning). `text` is
+ *   'cash' so the trip planner still books it as trip cash.
+ * - Anything else: the active account it resolves to. A miss forces one cache reload first (the
+ *   account may have just been added on the Dashboard); unknown, ambiguous or deactivated input
+ *   is not ok and carries the candidates.
+ * `allowInactive` (summary filters) accepts a deactivated account: its old rows still match.
+ */
+async function checkPaymentAccount(
+    raw: string | null | undefined,
+    options: { allowInactive?: boolean } = {}
+): Promise<AccountCheck> {
+    const input = raw?.trim();
+    if (!input) return { ok: true, name: null };
+    if (CASH_ACCOUNT_TEXT.test(input)) return { ok: true, name: resolvePaymentMethod('Cash'), text: 'cash' };
+    const resolution = await resolvePaymentMethodMatchFresh(input);
+    if (resolution.name) return { ok: true, name: resolution.name, text: input };
+    const candidates = resolution.candidates ?? [];
+    if (options.allowInactive && resolution.match === 'inactive' && candidates[0]) {
+        return { ok: true, name: candidates[0], text: input };
+    }
+    return { ok: false, input, match: resolution.match, candidates };
+}
+
+/** functionResponse for an account that didn't resolve. */
+function accountMissResponse(miss: AccountMiss, known: string[]): Record<string, unknown> {
+    return {
+        status: 'unknown_payment_method',
+        input: miss.input,
+        match: miss.match,
+        candidates: miss.candidates,
+        known,
+    };
+}
+
+/** The question shown when an account doesn't resolve; `known` lists the accounts to pick from. */
+function accountQuestion(miss: AccountMiss, known: string[]): string {
+    if (miss.match === 'ambiguous') {
+        return `"${miss.input}" matches more than one account: ${miss.candidates.join(', ')}. Which one?`;
+    }
+    const list = known.length > 0 ? ` Accounts: ${known.join(', ')}.` : '';
+    if (miss.match === 'inactive') {
+        const name = miss.candidates[0] ?? miss.input;
+        return `${name} is deactivated (reactivate it in the Dashboard Setup tab to use it). Which account was it?${list}`;
+    }
+    return `I couldn't find an account called "${miss.input}". Which account was it?${list}`;
+}
+
+/** Short reason for a list item skipped because its account didn't resolve. */
+function accountSkipReason(miss: AccountMiss): string {
+    if (miss.match === 'ambiguous') {
+        return `"${miss.input}" matches ${miss.candidates.join(' / ')} — say which, then resend`;
+    }
+    if (miss.match === 'inactive') {
+        return `${miss.candidates[0] ?? miss.input} is deactivated — use an active account, then resend`;
+    }
+    return `couldn't match payment account "${miss.input}" — use the exact account name, then resend`;
+}
+
+/** Active investment accounts: where an Investment top-up can go. */
+function investmentAccountNames(): string[] {
+    const spendable = new Set(getExpensePaymentAccountNames());
+    return getPaymentAccountNames().filter((name) => !spendable.has(name));
+}
+
+/** 3.3: the question for an Investment / funded Other expense whose accounts are missing or equal. */
+function fundingQuestion(from: string | null, to: string | null, error: string): string {
+    const asks: string[] = [];
+    if (!from) asks.push('which account the money came from');
+    if (!to) {
+        const investments = investmentAccountNames();
+        asks.push(
+            `which investment account it went to${investments.length > 0 ? ` (${investments.join(', ')})` : ''}`
+        );
+    }
+    return asks.length > 0
+        ? `an investment top-up needs both accounts. Tell me ${asks.join(' and ')}.`
+        : `${error}.`;
+}
+
+function errorMessage(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+}
+
+/** Same account text (trimmed, case-insensitive; null and empty are equal): the stored value is kept. */
+function sameAccountName(a?: string | null, b?: string | null): boolean {
+    return (a?.trim() ?? '').toLowerCase() === (b?.trim() ?? '').toLowerCase();
 }
 
 interface ExpenseItemArgs {
@@ -297,6 +450,8 @@ const KNOWN_TOOL_NAMES = new Set([
     'update_fixed_expense',
     'get_all_fixed_expenses',
     'delete_fixed_expense',
+    'invest_in_fund',
+    'withdraw_from_fund',
     'add_interest_schedule',
     'update_interest_schedule',
     'get_all_interest_schedules',
@@ -306,11 +461,15 @@ const KNOWN_TOOL_NAMES = new Set([
     'reschedule_calendar_event',
     'cancel_calendar_event',
     'log_bulk_expenses',
+    'log_currency_exchange',
+    'create_trip',
+    'get_trip_summary',
     'log_workout',
     'log_bulk_workouts',
     'edit_workout',
     'delete_workout',
     'log_body_weight',
+    'log_steps',
     'get_workout_summary',
     'get_workout_history',
     'suggest_workout',
@@ -328,6 +487,7 @@ const KNOWN_TOOL_NAMES = new Set([
 /** Handlers that relay the model's follow-up text to the user, so their functionResponse can't be deferred. */
 export const TOOLS_READING_MODEL_REPLY = new Set([
     'get_spending_summary',
+    'get_trip_summary',
     'get_all_fixed_expenses',
     'create_calendar_event',
     'check_schedule',
@@ -376,9 +536,73 @@ export async function handleToolCall(
     if (call.name === 'log_expense') {
         const args = call.args as ExpenseItemArgs & {
             reimbursements?: { source: string; amount: number }[];
+            toInvestmentAccount?: string;
+            dashboardNote?: string;
         };
         const resolvedDate = resolveLogDate(toIsoDate(args.date), options);
         const resolvedCategory = resolveCategory(args.category);
+        // Nothing is logged: ask (single call) or list it as not logged (several calls in one turn).
+        const notLogged = async (
+            response: Record<string, unknown>,
+            question: string,
+            skipReason: string
+        ): Promise<ToolCallResult> => {
+            await chat.sendMessage([{ functionResponse: { name: 'log_expense', response } }]);
+            if (options?.suppressExpenseReply) {
+                options.expenseSkipCollector?.push({
+                    date: resolvedDate,
+                    description: args.description,
+                    amount: args.amount,
+                    currency: args.currency || 'MYR',
+                    reason: skipReason,
+                });
+                return 'complete';
+            }
+            await ctx.reply(`⚠️ Not logged: ${question}`);
+            return 'awaiting_input';
+        };
+        // 3.2: checked on the raw text before the trip planner, whose isCash(null) can't tell a
+        // dropped account from trip cash. Cash variants and an omitted account pass.
+        const account = await checkPaymentAccount(args.paymentMethod);
+        if (!account.ok) {
+            const known = getExpensePaymentAccountNames();
+            return notLogged(
+                accountMissResponse(account, known),
+                accountQuestion(account, known),
+                accountSkipReason(account)
+            );
+        }
+        // 3.3: Investment (and Other with both accounts) also credits the destination account.
+        const fundable = isInvestmentCategory(resolvedCategory) || isOtherCategory(resolvedCategory);
+        const destinationCheck = fundable ? await checkPaymentAccount(args.toInvestmentAccount) : null;
+        if (destinationCheck && !destinationCheck.ok) {
+            const known = getPaymentAccountNames();
+            return notLogged(
+                accountMissResponse(destinationCheck, known),
+                accountQuestion(destinationCheck, known),
+                accountSkipReason(destinationCheck)
+            );
+        }
+        let paymentMethod = account.name;
+        let toInvestmentAccount = destinationCheck?.ok ? destinationCheck.name : null;
+        if (isOtherCategory(resolvedCategory)) {
+            ({ paymentMethod, toInvestmentAccount } = normalizeOtherAccounts(paymentMethod, toInvestmentAccount));
+        }
+        const fundingError = validateFundingAccounts(resolvedCategory, paymentMethod, toInvestmentAccount);
+        if (fundingError) {
+            return notLogged(
+                {
+                    status: 'needs_accounts',
+                    error: fundingError,
+                    paymentMethod,
+                    toInvestmentAccount,
+                    investmentAccounts: investmentAccountNames(),
+                },
+                fundingQuestion(paymentMethod, toInvestmentAccount, fundingError),
+                'investment needs a from and a to account — say which, then resend'
+            );
+        }
+        const destination = fundingDestination(resolvedCategory, paymentMethod, toInvestmentAccount);
         const result = await logExpenseWithTrip(
             {
                 date: resolvedDate,
@@ -387,8 +611,9 @@ export async function handleToolCall(
                 amountText: args.amountText,
                 category: resolvedCategory,
                 description: args.description,
-                paymentMethod: resolvePaymentMethod(args.paymentMethod),
-                paymentMethodText: args.paymentMethod,
+                paymentMethod,
+                // Only 'cash' or nothing reaches here unresolved; the trip planner books both as trip cash.
+                paymentMethodText: paymentMethod ?? account.text,
                 tripExpense: args.tripExpense,
             },
             options?.tripLookup ?? new TripLookup()
@@ -422,11 +647,42 @@ export async function handleToolCall(
         if (reimbursements?.length) {
             await appendReimbursements(entry.expenseId, reimbursements, resolvedDate);
         }
+        // 3.3: the linked Account transfer into the investment account (trip legs have none).
+        let fundingLine = '';
+        let fundingWarning: string | undefined;
+        if (destination && paymentMethod && entry.tripLeg == null) {
+            try {
+                await upsertInvestmentFundingTransfer({
+                    expenseId: entry.expenseId,
+                    date: resolvedDate,
+                    amount: entry.amount,
+                    description: args.description,
+                    fromPaymentMethod: paymentMethod,
+                    toInvestmentAccount: destination,
+                });
+                fundingLine = `\n🏦 → ${destination} (linked transfer)`;
+            } catch (err) {
+                fundingWarning = `transfer to ${destination} not recorded (${errorMessage(err)}), fix it on the Dashboard`;
+                fundingLine = `\n⚠️ ${fundingWarning[0].toUpperCase()}${fundingWarning.slice(1)}`;
+            }
+        }
         await chat.sendMessage([
-            { functionResponse: { name: 'log_expense', response: { status: 'success' } } },
+            {
+                functionResponse: {
+                    name: 'log_expense',
+                    response: {
+                        status: 'success',
+                        ...(destination && !fundingWarning ? { linkedTransferTo: destination } : {}),
+                    },
+                },
+            },
         ]);
+        // 3.13: what to record on the Dashboard for a Dashboard-only item (car service, share trade).
+        const dashboardNote = args.dashboardNote?.trim();
+        const replyExtra = fundingLine + (dashboardNote ? `\n📝 ${dashboardNote}` : '');
         if (options?.suppressExpenseReply) {
-            options.expenseBatchCollector?.push({ ...entry, reimbursements });
+            const note = [entry.note, fundingWarning, dashboardNote].filter(Boolean).join('; ') || undefined;
+            options.expenseBatchCollector?.push({ ...entry, note, reimbursements });
             return 'complete';
         }
         if (reimbursements?.length) {
@@ -440,7 +696,7 @@ export async function handleToolCall(
                     reimbursements,
                     entry.expenseId,
                     entry.paymentMethod
-                )
+                ) + replyExtra
             );
         } else {
             await ctx.reply(
@@ -454,7 +710,7 @@ export async function handleToolCall(
                     entry.paymentMethod,
                     undefined,
                     entry
-                )
+                ) + replyExtra
             );
         }
         return 'complete';
@@ -469,28 +725,96 @@ export async function handleToolCall(
             relatedExpenseDescription?: string;
             paymentMethod?: string;
             fromPaymentMethod?: string;
+            transferFee?: number;
+            dashboardNote?: string;
         };
         const resolvedDate = resolveLogDate(args.date, options);
         const resolvedCurrency = args.currency || 'MYR';
-        let expenseId: number | undefined = options?.replyToExpenseId;
-        if (!expenseId && args.relatedExpenseDescription) {
+        const isTransfer = isAccountTransferCategory(args.category ?? '');
+        // 3.15: a move between your own accounts never funds the replied-to (or described) expense;
+        // linking it would make both apps skip that expense's debit.
+        let expenseId: number | undefined = isTransfer ? undefined : options?.replyToExpenseId;
+        if (!isTransfer && !expenseId && args.relatedExpenseDescription) {
             const found = await findRecentExpenseByDescription(args.relatedExpenseDescription);
             if (found) expenseId = found;
         }
-        const incomeId = await appendIncome(
-            resolvedDate,
-            args.amount,
-            resolvedCurrency,
-            args.category,
-            args.description,
-            args.source,
-            expenseId,
-            args.paymentMethod,
-            args.fromPaymentMethod
-        );
+        // 3.2: the to-account (and a transfer's from-account) must resolve, or the user is asked.
+        const toAccount = await checkPaymentAccount(args.paymentMethod);
+        const fromAccount = isTransfer ? await checkPaymentAccount(args.fromPaymentMethod) : null;
+        const accountMiss = !toAccount.ok ? toAccount : fromAccount && !fromAccount.ok ? fromAccount : null;
+        if (accountMiss) {
+            const known = getPaymentAccountNames();
+            await chat.sendMessage([
+                { functionResponse: { name: 'log_income', response: accountMissResponse(accountMiss, known) } },
+            ]);
+            await ctx.reply(`⚠️ Not logged: ${accountQuestion(accountMiss, known)}`);
+            return 'awaiting_input';
+        }
+        const toName = toAccount.ok ? toAccount.name : null;
+        const fromName = fromAccount?.ok ? fromAccount.name : null;
+        // An Account transfer needs both sides: ask (keeping this chat open), as for an unknown account,
+        // instead of letting appendIncome throw and end the conversation.
+        if (isTransfer && (!fromName || !toName)) {
+            const known = getPaymentAccountNames();
+            const asks = [
+                !fromName ? 'which account the money left' : null,
+                !toName ? 'which account it went to' : null,
+            ].filter(Boolean);
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'log_income',
+                        response: {
+                            status: 'needs_accounts',
+                            error: 'Account transfer requires from and to accounts',
+                            fromPaymentMethod: fromName,
+                            paymentMethod: toName,
+                            known,
+                        },
+                    },
+                },
+            ]);
+            const list = known.length > 0 ? ` Accounts: ${known.join(', ')}.` : '';
+            await ctx.reply(`⚠️ Not logged: an account transfer needs both accounts. Tell me ${asks.join(' and ')}.${list}`);
+            return 'awaiting_input';
+        }
+        let incomeId: number;
+        try {
+            incomeId = await appendIncome(
+                resolvedDate,
+                args.amount,
+                resolvedCurrency,
+                args.category,
+                args.description,
+                args.source,
+                expenseId,
+                toName,
+                fromName,
+                args.transferFee
+            );
+        } catch (err) {
+            // Equal transfer accounts, or a fee on a non-transfer: nothing was written.
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'log_income',
+                        response: { status: 'error', message: errorMessage(err) },
+                    },
+                },
+            ]);
+            await ctx.reply(`⚠️ ${errorMessage(err)}`);
+            return 'complete';
+        }
+        // The income is already written: a failed re-read falls back to what was passed in, so the user
+        // still gets the confirmation (a throw here could also make runSpecialist retry and log it twice).
+        const stored = await getIncomeById(incomeId).catch((err) => {
+            console.warn(`log_income: re-reading income #${incomeId} failed:`, err);
+            return null;
+        });
         await chat.sendMessage([
             { functionResponse: { name: 'log_income', response: { status: 'success', incomeId } } },
         ]);
+        const incomeDashboardNote = args.dashboardNote?.trim();
         await ctx.reply(
             formatIncomeLogReply(
                 resolvedDate,
@@ -501,9 +825,11 @@ export async function handleToolCall(
                 incomeId,
                 args.source,
                 expenseId != null,
-                args.paymentMethod,
-                args.fromPaymentMethod
-            )
+                stored?.paymentMethod ?? toName,
+                stored ? stored.fromPaymentMethod : fromName,
+                '✅ Logged income',
+                stored ? stored.transferFee : args.transferFee
+            ) + (incomeDashboardNote ? `\n📝 ${incomeDashboardNote}` : '')
         );
         return 'complete';
     } else if (call.name === 'edit_expense') {
@@ -515,6 +841,7 @@ export async function handleToolCall(
             category?: string;
             description?: string;
             paymentMethod?: string;
+            toInvestmentAccount?: string;
         };
         const id = resolveToolRecordId(args.id, options, 'expense');
         if (id == null) {
@@ -561,24 +888,170 @@ export async function handleToolCall(
             // Trip-currency rows are always stored in MYR; a bare currency change would corrupt them.
             amountFields = {};
         }
-        const updated = await updateExpense(id, {
+        // Nothing is written: ask for the missing / unknown account.
+        const notUpdated = async (
+            response: Record<string, unknown>,
+            question: string
+        ): Promise<ToolCallResult> => {
+            await chat.sendMessage([{ functionResponse: { name: 'edit_expense', response } }]);
+            await ctx.reply(`⚠️ #${id} not updated: ${question}`);
+            return 'awaiting_input';
+        };
+        // 3.2: a changed account must resolve (cash variants pass, empty clears it). The same text as
+        // stored goes through as is: updateExpense keeps it even if it no longer resolves.
+        let paymentMethodField: string | null | undefined = args.paymentMethod;
+        let nextFrom = existing.paymentMethod;
+        if (args.paymentMethod != null && !sameAccountName(args.paymentMethod, existing.paymentMethod)) {
+            const check = await checkPaymentAccount(args.paymentMethod);
+            if (!check.ok) {
+                const known = getExpensePaymentAccountNames();
+                return notUpdated(accountMissResponse(check, known), accountQuestion(check, known));
+            }
+            paymentMethodField = check.name;
+            nextFrom = check.name;
+        }
+        // 3.3: an Investment row (or Other with a linked transfer) keeps its funding transfer in step,
+        // checked before anything is written. Trip legs never carry one.
+        let funding: { from: string; to: string } | 'delete' | null = null;
+        if (existing.tripLeg == null) {
+            let destination: string | null = null;
+            if (args.toInvestmentAccount?.trim()) {
+                const check = await checkPaymentAccount(args.toInvestmentAccount);
+                if (!check.ok) {
+                    const known = getPaymentAccountNames();
+                    return notUpdated(accountMissResponse(check, known), accountQuestion(check, known));
+                }
+                destination = check.name;
+            }
+            const linkedTransfer = (await getIncomesByExpenseId(id)).find((income) =>
+                isAccountTransferCategory(income.category)
+            );
+            const nextCategory = args.category != null ? resolveCategory(args.category) : existing.category;
+            const keepsTransfer =
+                isInvestmentCategory(nextCategory) ||
+                (isOtherCategory(nextCategory) && (linkedTransfer != null || destination != null));
+            if (keepsTransfer) {
+                const nextTo = destination ?? displayPaymentMethod(linkedTransfer?.paymentMethod);
+                // Both accounts required and different, as for an Investment row.
+                const fundingError = validateFundingAccounts('Investment', nextFrom, nextTo);
+                if (fundingError || !nextFrom || !nextTo) {
+                    const error = fundingError ?? 'This expense requires both accounts';
+                    return notUpdated(
+                        {
+                            status: 'needs_accounts',
+                            error,
+                            paymentMethod: nextFrom,
+                            toInvestmentAccount: nextTo,
+                            investmentAccounts: investmentAccountNames(),
+                        },
+                        fundingQuestion(nextFrom, nextTo, error)
+                    );
+                }
+                funding = { from: nextFrom, to: nextTo };
+            } else if (linkedTransfer) {
+                funding = 'delete';
+            }
+        }
+        const fields: Parameters<typeof updateExpense>[1] = {
             date: toIsoDate(args.date),
             ...amountFields,
             category: args.category,
             description: args.description,
-            paymentMethod: args.paymentMethod,
-        });
-        if (!updated) {
+            paymentMethod: paymentMethodField,
+        };
+        // A destination only applies to Investment / Other rows (never trip legs): say it was ignored
+        // rather than drop it silently, or fail with no reason when it was the only change.
+        const ignoredDestination =
+            args.toInvestmentAccount?.trim() && (funding == null || funding === 'delete')
+                ? args.toInvestmentAccount.trim()
+                : null;
+        const noTransferReason =
+            existing.tripLeg != null
+                ? 'trip expenses never move money to another account'
+                : 'only Investment and Other expenses move money to another account';
+        if (ignoredDestination && Object.values(fields).every((value) => value === undefined)) {
             await chat.sendMessage([
-                { functionResponse: { name: 'edit_expense', response: { status: 'failed' } } },
+                {
+                    functionResponse: {
+                        name: 'edit_expense',
+                        response: {
+                            status: 'not_applicable',
+                            reason: noTransferReason,
+                            category: args.category != null ? resolveCategory(args.category) : existing.category,
+                        },
+                    },
+                },
             ]);
-            await ctx.reply(`⚠️ Failed to update expense #${id}.`);
+            await ctx.reply(`⚠️ #${id} not updated: ${noTransferReason}.`);
             return 'complete';
+        }
+        // "#12 went to StashAway" changes only the linked transfer, not the expense row.
+        const transferOnly =
+            funding != null &&
+            funding !== 'delete' &&
+            Object.values(fields).every((value) => value === undefined);
+        if (!transferOnly) {
+            let updated: boolean;
+            try {
+                updated = await updateExpense(id, fields);
+            } catch (err) {
+                await chat.sendMessage([
+                    {
+                        functionResponse: {
+                            name: 'edit_expense',
+                            response: { status: 'error', message: errorMessage(err) },
+                        },
+                    },
+                ]);
+                await ctx.reply(`⚠️ ${errorMessage(err) || 'Failed to update expense.'}`);
+                return 'complete';
+            }
+            if (!updated) {
+                await chat.sendMessage([
+                    { functionResponse: { name: 'edit_expense', response: { status: 'failed' } } },
+                ]);
+                await ctx.reply(`⚠️ Failed to update expense #${id}.`);
+                return 'complete';
+            }
         }
         const row = (await getExpenseById(id))!;
         const trip = row.tripId != null ? await getTripById(row.tripId) : null;
+        let fundingLine = '';
+        if (funding === 'delete') {
+            try {
+                await deleteInvestmentFundingTransfer(id);
+                fundingLine = '\n🗑️ Linked transfer removed';
+            } catch (err) {
+                fundingLine = `\n⚠️ Linked transfer not removed (${errorMessage(err)}), fix it on the Dashboard`;
+            }
+        } else if (funding) {
+            try {
+                await upsertInvestmentFundingTransfer({
+                    expenseId: id,
+                    date: row.date,
+                    amount: row.amount,
+                    description: row.description,
+                    fromPaymentMethod: funding.from,
+                    toInvestmentAccount: funding.to,
+                });
+                fundingLine = `\n🏦 → ${funding.to} (linked transfer)`;
+            } catch (err) {
+                fundingLine = `\n⚠️ Linked transfer not updated (${errorMessage(err)}), fix it on the Dashboard`;
+            }
+        }
         await chat.sendMessage([
-            { functionResponse: { name: 'edit_expense', response: { status: 'success', expenseId: id } } },
+            {
+                functionResponse: {
+                    name: 'edit_expense',
+                    response: {
+                        status: 'success',
+                        expenseId: id,
+                        ...(ignoredDestination
+                            ? { ignoredToInvestmentAccount: ignoredDestination, reason: noTransferReason }
+                            : {}),
+                    },
+                },
+            },
         ]);
         await ctx.reply(
             formatExpenseLogReply(
@@ -591,7 +1064,9 @@ export async function handleToolCall(
                 row.paymentMethod,
                 '✅ Updated',
                 { ...row, tripName: trip?.name }
-            )
+            ) +
+                fundingLine +
+                (ignoredDestination ? `\n(No transfer to ${ignoredDestination}: ${noTransferReason}.)` : '')
         );
         return 'complete';
     } else if (call.name === 'delete_expense') {
@@ -628,6 +1103,7 @@ export async function handleToolCall(
             source?: string;
             paymentMethod?: string;
             fromPaymentMethod?: string;
+            transferFee?: number;
         };
         const id = resolveToolRecordId(args.id, options, 'income');
         if (id == null) {
@@ -645,6 +1121,31 @@ export async function handleToolCall(
             await ctx.reply(`⚠️ Could not find income #${id} to update.`);
             return 'complete';
         }
+        // 3.2: a changed account must resolve (cash variants pass, empty clears it), or the user is
+        // asked. The same text as stored goes through: updateIncome keeps it even if it no longer
+        // resolves. A from-account only matters for an Account transfer.
+        const nextIsTransfer = isAccountTransferCategory(args.category ?? existing.category);
+        const incomeAccount = async (
+            incoming: string | undefined,
+            stored: string | null
+        ): Promise<{ value: string | null | undefined } | AccountMiss> => {
+            if (incoming == null || sameAccountName(incoming, stored)) return { value: incoming };
+            const check = await checkPaymentAccount(incoming);
+            return check.ok ? { value: check.name } : check;
+        };
+        const toField = await incomeAccount(args.paymentMethod, existing.paymentMethod);
+        const fromField = nextIsTransfer
+            ? await incomeAccount(args.fromPaymentMethod, existing.fromPaymentMethod)
+            : { value: args.fromPaymentMethod };
+        const incomeMiss = 'ok' in toField ? toField : 'ok' in fromField ? fromField : null;
+        if (incomeMiss) {
+            const known = getPaymentAccountNames();
+            await chat.sendMessage([
+                { functionResponse: { name: 'edit_income', response: accountMissResponse(incomeMiss, known) } },
+            ]);
+            await ctx.reply(`⚠️ #${id} not updated: ${accountQuestion(incomeMiss, known)}`);
+            return 'awaiting_input';
+        }
         try {
             const updated = await updateIncome(id, {
                 date: args.date,
@@ -653,8 +1154,9 @@ export async function handleToolCall(
                 category: args.category,
                 description: args.description,
                 source: args.source,
-                paymentMethod: args.paymentMethod,
-                fromPaymentMethod: args.fromPaymentMethod,
+                paymentMethod: 'value' in toField ? toField.value : undefined,
+                fromPaymentMethod: 'value' in fromField ? fromField.value : undefined,
+                transferFee: args.transferFee,
             });
             if (!updated) {
                 await chat.sendMessage([
@@ -691,7 +1193,8 @@ export async function handleToolCall(
                 row.expenseId != null,
                 row.paymentMethod,
                 row.fromPaymentMethod,
-                '✅ Updated income'
+                '✅ Updated income',
+                row.transferFee
             )
         );
         return 'complete';
@@ -726,93 +1229,182 @@ export async function handleToolCall(
             startDate?: string;
             endDate?: string;
         };
+        // 3.2: an account filter that matches no account would summarise nothing (or, before, the
+        // whole month). A deactivated account still filters: its old rows keep its name.
+        let paymentMethodFilter = args.paymentMethod;
+        if (args.paymentMethod?.trim()) {
+            const check = await checkPaymentAccount(args.paymentMethod, { allowInactive: true });
+            if (!check.ok) {
+                const known = getPaymentAccountNames();
+                await chat.sendMessage([
+                    {
+                        functionResponse: {
+                            name: 'get_spending_summary',
+                            response: accountMissResponse(check, known),
+                        },
+                    },
+                ]);
+                await ctx.reply(`⚠️ ${accountQuestion(check, known)}`);
+                return 'awaiting_input';
+            }
+            // Cash with no Cash account: filter on the text, which matches rows stored as "Cash".
+            paymentMethodFilter = check.name ?? args.paymentMethod.trim();
+        }
         const summaryData = await getSpendingSummary(
             args.category,
             args.description,
             args.startDate,
             args.endDate,
-            args.paymentMethod
+            paymentMethodFilter
         );
         const toolResult = await chat.sendMessage([
             { functionResponse: { name: 'get_spending_summary', response: summaryData } },
         ]);
         await ctx.reply(toolResult.response.text());
         return 'complete';
-    } else if (call.name === 'add_fixed_expense') {
+    } else if (call.name === 'log_currency_exchange') {
+        // 3.11: the Dashboard Trips panel's "Add exchange", from Telegram.
         const args = call.args as {
-            dayOfMonth?: number;
-            amount: number;
-            frequencyInMonths?: number;
-            currency?: string;
-            category?: string;
-            description?: string;
+            date?: string;
+            myrAmount: number;
+            foreignAmount: number;
+            foreignAmountText?: string;
+            foreignCurrency?: string;
             paymentMethod?: string;
+            tripName?: string;
         };
-        const finalDay = args.dayOfMonth || 1;
-        const frequency = args.frequencyInMonths || 1;
-        const startMonth = parseInt(
-            new Date().toLocaleString('en-US', {
-                timeZone: 'Asia/Kuala_Lumpur',
-                month: 'numeric',
-            })
+        const exchangeNotLogged = async (
+            response: Record<string, unknown>,
+            message: string,
+            ask: boolean
+        ): Promise<ToolCallResult> => {
+            await chat.sendMessage([{ functionResponse: { name: 'log_currency_exchange', response } }]);
+            await ctx.reply(`⚠️ Exchange not logged: ${asSentence(message)}`);
+            return ask ? 'awaiting_input' : 'complete';
+        };
+        // Like the Dashboard, an exchange needs the active account the MYR came from.
+        const account = await checkPaymentAccount(args.paymentMethod);
+        if (!account.ok) {
+            const known = getExpensePaymentAccountNames();
+            return exchangeNotLogged(accountMissResponse(account, known), accountQuestion(account, known), true);
+        }
+        if (!account.name) {
+            const known = getExpensePaymentAccountNames();
+            const list = known.length > 0 ? ` Accounts: ${known.join(', ')}.` : '';
+            return exchangeNotLogged(
+                { status: 'needs_payment_method', known },
+                account.text === 'cash'
+                    ? `there is no active Cash account (add it in the Dashboard Setup tab). Which account paid?${list}`
+                    : `which account did the MYR come from (Cash at a money changer, or a bank)?${list}`,
+                true
+            );
+        }
+        const exchange = await logCurrencyExchange(
+            {
+                date: resolveLogDate(toIsoDate(args.date), options),
+                myrAmount: args.myrAmount,
+                foreignAmount: args.foreignAmount,
+                foreignAmountText: args.foreignAmountText,
+                foreignCurrency: args.foreignCurrency,
+                paymentMethod: account.name,
+                tripName: args.tripName,
+            },
+            // Shared with the turn's other calls: logCurrencyExchange drops the cached rate, so
+            // trip-currency spends later in the same message convert at the new rate.
+            options?.tripLookup ?? new TripLookup()
         );
-        const currency = args.currency || 'MYR';
-        const category = resolveCategory(args.category);
-        const description = args.description || `Recurring ${category}`;
-        const paymentMethod = resolvePaymentMethod(args.paymentMethod);
-
-        await addFixedExpense(
-            finalDay,
-            args.amount,
-            currency,
-            category,
-            description,
-            frequency,
-            startMonth,
-            paymentMethod
-        );
-        await chat.sendMessage([
-            { functionResponse: { name: 'add_fixed_expense', response: { status: 'success' } } },
-        ]);
-
-        let freqWord = 'monthly';
-        if (frequency === 2) freqWord = 'every 2 months';
-        if (frequency === 3) freqWord = 'quarterly';
-        if (frequency === 12) freqWord = 'yearly';
-
-        await ctx.reply(
-            `🔄 Done! I've set up a ${freqWord} rule to log ${currency} ${args.amount} for ${description} on the ${finalDay} of the month.` +
-                (paymentMethod ? ` Paid via: ${paymentMethod}.` : '')
-        );
-        return 'complete';
-    } else if (call.name === 'update_fixed_expense') {
-        const args = call.args as { description: string; newAmount: number };
-        const updateStatus = await updateFixedExpensePrice(args.description, args.newAmount);
+        if (exchange.status === 'not_logged') {
+            return exchangeNotLogged({ status: 'not_logged', reason: exchange.reason }, exchange.reason, exchange.ask);
+        }
         await chat.sendMessage([
             {
                 functionResponse: {
-                    name: 'update_fixed_expense',
-                    response: { status: updateStatus === true ? 'success' : 'failed' },
+                    name: 'log_currency_exchange',
+                    response: {
+                        status: 'success',
+                        expenseId: exchange.expenseId,
+                        trip: exchange.trip.name,
+                        myrAmount: exchange.myrAmount,
+                        fxAmount: exchange.fxAmount,
+                        fxCurrency: exchange.trip.tripCurrency,
+                    },
                 },
             },
         ]);
-        if (updateStatus === 'not_found') {
-            await ctx.reply(
-                `⚠️ I couldn't find any recurring bill matching "${args.description}" in your system.`
-            );
-        } else {
-            await ctx.reply(
-                `✅ Got it! I have updated your recurring ${args.description} bill to RM ${args.newAmount}.`
-            );
+        await ctx.reply(formatCurrencyExchangeReply(exchange));
+        return 'complete';
+    } else if (call.name === 'create_trip') {
+        // 3.11: the Trips panel's "New trip", from Telegram.
+        const args = call.args as {
+            name?: string;
+            tripCurrency?: string;
+            startDate?: string;
+            endDate?: string;
+            notes?: string;
+        };
+        const newTrip = planNewTrip(
+            { ...args, startDate: toIsoDate(args.startDate), endDate: toIsoDate(args.endDate) },
+            await listTrips()
+        );
+        if ('error' in newTrip) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'create_trip', response: { status: 'not_created', reason: newTrip.error } } },
+            ]);
+            await ctx.reply(`⚠️ Trip not created: ${asSentence(newTrip.error)}`);
+            return newTrip.ask ? 'awaiting_input' : 'complete';
         }
-        return 'complete';
-    } else if (call.name === 'get_all_fixed_expenses') {
-        const allExpenses = await getAllFixedExpenses();
-        const toolResult = await chat.sendMessage([
-            { functionResponse: { name: 'get_all_fixed_expenses', response: { expenses: allExpenses } } },
+        const trip = await createTrip(newTrip.fields);
+        // An exchange or spend later in this message must see the new trip.
+        options?.tripLookup?.invalidateTrips();
+        await chat.sendMessage([
+            {
+                functionResponse: {
+                    name: 'create_trip',
+                    response: { status: 'success', tripId: trip.id, name: trip.name, tripCurrency: trip.tripCurrency },
+                },
+            },
         ]);
-        await ctx.reply(toolResult.response.text());
+        await ctx.reply(formatTripCreatedReply(trip, newTrip.overlaps));
         return 'complete';
+    } else if (call.name === 'get_trip_summary') {
+        // 3.12: the Trips panel totals; the date-range summary counts the exchange as spending,
+        // misses trip-cash rows and includes home bills.
+        const args = call.args as { tripName?: string; date?: string };
+        const picked = pickSummaryTrip(await listTrips(), args.tripName, toIsoDate(args.date) || todayISO());
+        const summary = 'trip' in picked ? await getTripSummary(picked.trip.id) : null;
+        if (!summary) {
+            const message = 'error' in picked ? picked.error : 'Trip not found.';
+            await chat.sendMessage([
+                { functionResponse: { name: 'get_trip_summary', response: { status: 'not_found', message } } },
+            ]);
+            await ctx.reply(`⚠️ ${message}`);
+            return 'error' in picked && picked.ask ? 'awaiting_input' : 'complete';
+        }
+        const view = tripSummaryView(summary);
+        const toolResult = await chat.sendMessage([
+            {
+                functionResponse: {
+                    name: 'get_trip_summary',
+                    response: { status: 'success', ...view, wording: TRIP_SUMMARY_WORDING },
+                },
+            },
+        ]);
+        const text = toolResult.response.text();
+        await replyInChunks(ctx, text.trim() ? text : formatTripSummaryReply(view));
+        return 'complete';
+    } else if (call.name === 'add_fixed_expense') {
+        // 3.6 / 3.2: holding, destination account and the unknown-account guard (fixedFundHandlers.ts).
+        return addFixedExpenseTool(call.args as AddFixedExpenseArgs, chat, ctx);
+    } else if (call.name === 'update_fixed_expense') {
+        return updateFixedExpenseTool(call.args as UpdateFixedExpenseArgs, chat, ctx);
+    } else if (call.name === 'get_all_fixed_expenses') {
+        return listFixedExpensesTool(chat, ctx);
+    } else if (call.name === 'invest_in_fund') {
+        const args = call.args as FundMoveArgs;
+        return investInFundTool(args, resolveLogDate(toIsoDate(args.date), options), chat, ctx);
+    } else if (call.name === 'withdraw_from_fund') {
+        const args = call.args as FundMoveArgs;
+        return withdrawFromFundTool(args, resolveLogDate(toIsoDate(args.date), options), chat, ctx);
     } else if (call.name === 'delete_fixed_expense') {
         const args = call.args as { description: string };
         const deleteStatus = await deleteFixedExpense(args.description);
@@ -847,12 +1439,25 @@ export async function handleToolCall(
         const frequency = (args.frequency?.toLowerCase() === 'monthly'
             ? 'monthly'
             : 'daily') as InterestFrequency;
-        const paymentMethod = resolvePaymentMethod(args.paymentMethod) ?? args.paymentMethod;
-        if (!paymentMethod?.trim()) {
-            await ctx.reply('⚠️ Please specify a valid payment account for interest.');
-            return 'complete';
+        // 3.2 / financeConfig ACCOUNTS rule: an unknown, ambiguous or deactivated account is asked
+        // about, never stored as raw text (the 9am accrual would then log interest with no account).
+        const account = await checkPaymentAccount(args.paymentMethod);
+        if (!account.ok) {
+            const known = getPaymentAccountNames();
+            await chat.sendMessage([
+                { functionResponse: { name: 'add_interest_schedule', response: accountMissResponse(account, known) } },
+            ]);
+            await ctx.reply(`⚠️ Not saved: ${accountQuestion(account, known)}`);
+            return 'awaiting_input';
         }
-        const resolvedAccount = paymentMethod.trim();
+        if (!account.name) {
+            await chat.sendMessage([
+                { functionResponse: { name: 'add_interest_schedule', response: { status: 'needs_payment_method' } } },
+            ]);
+            await ctx.reply('⚠️ Please specify a valid payment account for interest.');
+            return 'awaiting_input';
+        }
+        const resolvedAccount = account.name;
         const description =
             args.description?.trim() ||
             `${resolvedAccount} ${frequency} interest`;
@@ -1178,18 +1783,42 @@ export async function handleToolCall(
         const lookup = options?.tripLookup ?? new TripLookup();
         const logged: ExpenseBatchEntry[] = [];
         const skipped: SkippedExpense[] = [];
+        let listKnownAccounts = false;
         for (const item of expensesArray as Partial<ExpenseItemArgs>[]) {
+            // Statement rows keep their own dates—no photo "today" override here.
+            const date = toIsoDate(item.date) || todayISO();
+            const category = resolveCategory(item.category);
+            const description = item.description?.trim() || 'Expense';
+            const skip = (reason: string) =>
+                skipped.push({
+                    date,
+                    description,
+                    amount: Number(item.amount) || 0,
+                    currency: item.currency?.trim().toUpperCase() || 'MYR',
+                    reason,
+                });
+            // 3.2: same guard as log_expense, on the raw text before the trip planner.
+            const account = await checkPaymentAccount(item.paymentMethod);
+            if (!account.ok) {
+                skip(accountSkipReason(account));
+                if (account.match !== 'ambiguous') listKnownAccounts = true;
+                continue;
+            }
+            // 3.3: a list entry has no destination account, so an Investment top-up is logged singly.
+            if (isInvestmentCategory(category)) {
+                skip('investment needs from/to accounts — log it singly');
+                continue;
+            }
             const result = await logExpenseWithTrip(
                 {
-                    // Statement rows keep their own dates—no photo "today" override here.
-                    date: toIsoDate(item.date) || todayISO(),
+                    date,
                     amount: Number(item.amount),
                     currency: item.currency,
                     amountText: item.amountText,
-                    category: resolveCategory(item.category),
-                    description: item.description?.trim() || 'Expense',
-                    paymentMethod: resolvePaymentMethod(item.paymentMethod),
-                    paymentMethodText: item.paymentMethod,
+                    category,
+                    description,
+                    paymentMethod: account.name,
+                    paymentMethodText: account.name ?? account.text,
                     tripExpense: item.tripExpense,
                 },
                 lookup
@@ -1197,15 +1826,23 @@ export async function handleToolCall(
             if (result.status === 'logged') logged.push(result.entry);
             else skipped.push(result.skipped);
         }
+        const knownAccounts = getExpensePaymentAccountNames();
         await chat.sendMessage([
             {
                 functionResponse: {
                     name: 'log_bulk_expenses',
-                    response: { status: 'success', count: logged.length, notLogged: skipped.length },
+                    response: {
+                        status: 'success',
+                        count: logged.length,
+                        notLogged: skipped.length,
+                        ...(listKnownAccounts ? { knownAccounts } : {}),
+                    },
                 },
             },
         ]);
-        await replyInChunks(ctx, formatBulkExpenseLogReply(logged, skipped));
+        const accountsHint =
+            listKnownAccounts && knownAccounts.length > 0 ? `\n\nAccounts: ${knownAccounts.join(', ')}` : '';
+        await replyInChunks(ctx, formatBulkExpenseLogReply(logged, skipped) + accountsHint);
         return 'complete';
     } else if (call.name === 'log_workout') {
         const args = call.args as WorkoutArgs;
@@ -1406,9 +2043,24 @@ export async function handleToolCall(
         return 'complete';
     } else if (call.name === 'get_workout_summary') {
         const args = call.args as { startDate: string; endDate: string };
-        const summary = await getWorkoutBurnSummary(userId, args.startDate, args.endDate);
+        // `||`, not `??`: toIsoDate passes '' through, which would drop the date bound.
+        const startDate = toIsoDate(args.startDate) || todayISO();
+        const endDate = toIsoDate(args.endDate) || startDate;
+        const summary = await getWorkoutBurnSummary(userId, startDate, endDate);
+        // The summary is workouts only; the Dashboard "calories burned" adds steps + BMR (3.9).
+        const burn = await getDailyBurnSeries(userId, startDate, endDate).catch((err) => {
+            console.warn('get_workout_summary: daily burn series failed:', err);
+            return null;
+        });
+        const missingForBmr =
+            burn && burn.bmrPerDay == null ? missingBmrFields(await getNutritionTargets(userId)) : [];
         const toolResult = await chat.sendMessage([
-            { functionResponse: { name: 'get_workout_summary', response: summary } },
+            {
+                functionResponse: {
+                    name: 'get_workout_summary',
+                    response: buildWorkoutSummaryResponse(summary, burn, missingForBmr),
+                },
+            },
         ]);
         await ctx.reply(toolResult.response.text());
         return 'complete';
@@ -1683,35 +2335,56 @@ export async function handleToolCall(
         await ctx.reply(toolResult.response.text());
         return 'complete';
     } else if (call.name === 'update_user_settings') {
-        const args = call.args as {
-            dailyProteinTargetG?: number;
-            dailyCalorieTarget?: number;
-            dailyCarbsTargetG?: number;
-            dailyFatTargetG?: number;
-            bodyWeightKg?: number;
-        };
-        await updateNutritionTargets(userId, {
-            dailyProteinTargetG: args.dailyProteinTargetG,
-            dailyCalorieTarget: args.dailyCalorieTarget,
-            dailyCarbsTargetG: args.dailyCarbsTargetG,
-            dailyFatTargetG: args.dailyFatTargetG,
-            bodyWeightKg: args.bodyWeightKg,
-        });
+        // Only stated, valid fields are passed on: a null would clear the stored value.
+        const { updates, changed, invalid } = parseUserSettingsArgs(call.args as UserSettingsArgs);
+        if (changed.length === 0) {
+            await chat.sendMessage([
+                {
+                    functionResponse: {
+                        name: 'update_user_settings',
+                        response: { status: invalid.length > 0 ? 'invalid' : 'no_change', invalid },
+                    },
+                },
+            ]);
+            await ctx.reply(formatUserSettingsReply({ changed, invalid }));
+            return 'complete';
+        }
+
+        await updateNutritionTargets(userId, updates);
+        // As the Dashboard settings save does: a new body weight is also today's weigh-in.
+        const weighIn =
+            updates.bodyWeightKg != null && updates.bodyWeightKg > 0
+                ? { kg: updates.bodyWeightKg, date: todayISO() }
+                : null;
+        if (weighIn) await upsertBodyWeightLog(userId, weighIn.date, weighIn.kg);
+
+        const settings = await getNutritionTargets(userId);
+        const bmr = bmrOf(settings);
+        const missingForBmr = missingBmrFields(settings);
         await chat.sendMessage([
-            { functionResponse: { name: 'update_user_settings', response: { status: 'success' } } },
+            {
+                functionResponse: {
+                    name: 'update_user_settings',
+                    response: {
+                        status: invalid.length > 0 ? 'partial' : 'success',
+                        saved: updates,
+                        invalid,
+                        weighInLogged: weighIn,
+                        bmrKcalPerDay: bmr != null ? Math.round(bmr) : null,
+                        missingForBmr,
+                    },
+                },
+            },
         ]);
-
-        const parts: string[] = [];
-        if (args.dailyCalorieTarget) parts.push(`${args.dailyCalorieTarget} cal`);
-        if (args.dailyProteinTargetG) parts.push(`${args.dailyProteinTargetG}g protein`);
-        if (args.dailyCarbsTargetG) parts.push(`${args.dailyCarbsTargetG}g carbs`);
-        if (args.dailyFatTargetG) parts.push(`${args.dailyFatTargetG}g fat`);
-        if (args.bodyWeightKg) parts.push(`${args.bodyWeightKg}kg body weight`);
-
         await ctx.reply(
-            parts.length > 0
-                ? `✅ Settings updated: ${parts.join(', ')}.`
-                : `✅ Settings updated.`
+            formatUserSettingsReply({
+                changed,
+                invalid,
+                weighIn,
+                bmr,
+                missingForBmr,
+                profileChanged: touchesBmrProfile(updates),
+            })
         );
         return 'complete';
     } else if (call.name === 'log_body_weight') {
@@ -1734,6 +2407,50 @@ export async function handleToolCall(
                   : ` (${delta > 0 ? '+' : ''}${delta.toFixed(2)}kg since ${previous!.date})`;
 
         await ctx.reply(`⚖️ Logged ${args.weightKg}kg for ${date}.${deltaText}`);
+        return 'complete';
+    } else if (call.name === 'log_steps') {
+        const args = call.args as { steps?: unknown; date?: string };
+        const steps = parseStepCount(args.steps);
+        const date = resolveLogDate(toIsoDate(args.date), options);
+        if (steps == null || !isIsoDate(date)) {
+            const message =
+                steps == null
+                    ? `${JSON.stringify(args.steps ?? null)} is not a valid step count (a number of 0 or more)`
+                    : `"${date}" is not a valid date (YYYY-MM-DD)`;
+            await chat.sendMessage([
+                { functionResponse: { name: 'log_steps', response: { status: 'invalid', message } } },
+            ]);
+            await ctx.reply(`⚠️ Steps not logged: ${message}.`);
+            return 'complete';
+        }
+
+        const [previous] = await listDailyActivityLogs(userId, date, date);
+        await upsertDailyActivityLog(userId, date, steps);
+        const { bodyWeightKg } = await getNutritionTargets(userId);
+        const stepKcal = stepCalories(steps, bodyWeightKg);
+        await chat.sendMessage([
+            {
+                functionResponse: {
+                    name: 'log_steps',
+                    response: {
+                        status: 'success',
+                        date,
+                        steps,
+                        stepKcal,
+                        previousSteps: previous?.steps ?? null,
+                    },
+                },
+            },
+        ]);
+        await ctx.reply(
+            formatStepsReply({
+                steps,
+                date,
+                stepKcal,
+                bodyWeightKg,
+                previousSteps: previous?.steps ?? null,
+            })
+        );
         return 'complete';
     }
 

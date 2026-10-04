@@ -30,6 +30,14 @@ let nameByLower = new Map<string, string>();
 let inactiveNameByLower = new Map<string, string>();
 let paymentMethodDescription = '';
 let expensePaymentMethodDescription = '';
+export interface PaymentSignalTerms {
+    /** Every account name, active and deactivated. */
+    accountNames: readonly string[];
+    /** The nicknames resolvePaymentMethod understands ("tng", "world card"). */
+    nicknames: readonly string[];
+}
+/** Replaced (a new object) on each cache load. */
+let paymentSignalTerms: PaymentSignalTerms = { accountNames: [], nicknames: Object.keys(ALIAS_MAP) };
 
 function namesForDescription(accounts: PaymentAccount[]): string {
     return accounts.map((a) => a.name).join(', ');
@@ -45,15 +53,19 @@ function applyCache(allAccounts: PaymentAccount[]): PaymentAccount[] {
             .filter((account) => !account.active && !nameByLower.has(account.name.toLowerCase()))
             .map((account) => [account.name.toLowerCase(), account.name])
     );
+    paymentSignalTerms = {
+        accountNames: allAccounts.map((account) => account.name),
+        nicknames: Object.keys(ALIAS_MAP),
+    };
     const spendable = accounts.filter((a) => a.accountType !== 'investment');
     paymentMethodDescription =
         accounts.length > 0
             ? `Optional. Use one of: ${namesForDescription(accounts)}. Omit if unknown.`
-            : 'Optional. Configure payment accounts in the dashboard Income tab. Omit if unknown.';
+            : 'Optional. Configure payment accounts in the Dashboard Setup tab. Omit if unknown.';
     expensePaymentMethodDescription =
         spendable.length > 0
             ? `Optional. Use one of: ${namesForDescription(spendable)}. Omit if unknown. Do not use investment accounts for expenses.`
-            : 'Optional. Configure payment accounts in the dashboard Income tab. Omit if unknown.';
+            : 'Optional. Configure payment accounts in the Dashboard Setup tab. Omit if unknown.';
     return cachedAccounts;
 }
 
@@ -186,4 +198,25 @@ export function getExpensePaymentMethodDescription(): string {
 
 export function paymentMethodBucket(stored: string | null | undefined): string {
     return stored ? resolvePaymentMethod(stored) ?? stored : '(none)';
+}
+
+/** Active account names, sorted (income, transfers, summary filters): the "known" list for an unmatched name. */
+export function getPaymentAccountNames(): string[] {
+    return cachedAccounts.map((a) => a.name).sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Every account name (active or deactivated) and nickname: the bot's router builds its "names a
+ * payment account" signal from these. The same object comes back until the next cache load.
+ */
+export function getPaymentSignalTerms(): PaymentSignalTerms {
+    return paymentSignalTerms;
+}
+
+/** Active non-investment account names, sorted: what an expense can be paid from. */
+export function getExpensePaymentAccountNames(): string[] {
+    return cachedAccounts
+        .filter((a) => a.accountType !== 'investment')
+        .map((a) => a.name)
+        .sort((a, b) => a.localeCompare(b));
 }

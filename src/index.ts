@@ -8,9 +8,17 @@ import {
     getFixedExpensesForToday,
     formatBulkExpenseLogReply,
     isFixedContributionRecorded,
+    type DueFixedExpense,
 } from './services/expenseService';
+import { contributeFixedExpense } from './services/fixedContributionService';
+import { getInstrumentById } from './services/investmentPortfolioService';
 import { buildTripContextHint, TripLookup } from './services/tripExpenseService';
-import { upsertInvestmentFundingTransfer, resolveReplyRecord } from './services/incomeService';
+import {
+    fundingDestination,
+    isInvestmentCategory,
+    upsertInvestmentFundingTransfer,
+    resolveReplyRecord,
+} from './services/incomeService';
 import {
     accrueInterestForSchedule,
     getInterestSchedulesForToday,
@@ -23,6 +31,7 @@ import {
     TOOLS_READING_MODEL_REPLY,
 } from './tools/toolHandler';
 import { getDomainDeclarations } from './tools/tools';
+import { buildHoldingsContextHints } from './tools/fixedFundHandlers';
 import { formatBulkWorkoutLogReply, getWorkoutSessionRows } from './services/gymService';
 import {
     createPlannerModel,
@@ -36,6 +45,7 @@ import {
 import { documentExpensePrompt } from './config/prompts';
 import { loadExpenseCategories } from './config/expenseCategories';
 import { loadPaymentAccounts, resolvePaymentMethod } from './config/paymentMethods';
+import { onFinanceNamesChanged, refreshFinanceCaches } from './config/cacheRefresh';
 import {
     getMealById,
     updateProteinTarget,
@@ -49,9 +59,11 @@ import {
     routeByHeuristics,
     getOrCreateSession,
     getOrCreateDomainChat,
+    invalidateDomainChats,
     filterSpecialistDomains,
     applyMoneyRoutingHints,
     hasMoneySignal,
+    plannerRouteDomains,
     UserChatState,
     SpecialistDomain,
 } from './routing/router';
@@ -80,6 +92,21 @@ const routeOptionsBase = () => ({
     heavyModel,
 });
 
+/** Tool descriptions and domain prompts embed the account/category names current at build time. */
+function buildModels() {
+    plannerModel = createPlannerModel(genAI);
+    defaultModel = createDomainModel(genAI, 'expense');
+    heavyModel = createDomainModel(genAI, 'expense', { heavy: true });
+}
+
+// A Dashboard edit renamed/added/removed an account or category: rebuild the models and let every
+// session rebuild its domain chats, so Gemini sees the new names on the next turn.
+onFinanceNamesChanged(() => {
+    console.log('🔄 Payment accounts or expense categories changed — rebuilding Gemini models');
+    buildModels();
+    invalidateDomainChats();
+});
+
 bot.catch((err, ctx) => {
     console.error(`🚨 CRITICAL ERROR in ${ctx.updateType} event:`);
     console.error(err);
@@ -94,6 +121,8 @@ bot.use(async (ctx, next) => {
         );
         return;
     }
+    // Pick up accounts/categories edited on the Dashboard (reloads at most once a minute; never throws).
+    await refreshFinanceCaches();
     return next();
 });
 
@@ -103,6 +132,143 @@ async function notifyOwner(message: string) {
     } catch (notifyError) {
         console.error('Failed to send owner notification:', notifyError);
     }
+}
+
+/** Telegram legacy Markdown: escape _ * ` [ in user text so a name can't break the cron messages. */
+function escapeMarkdown(text: string): string {
+    return text.replace(/[_*`[]/g, (ch) => `\\${ch}`);
+}
+
+function errorText(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+/** Sends a 9am cron report; never throws. Falls back to plain text if Telegram rejects the Markdown. */
+async function sendCronReport(message: string): Promise<void> {
+    try {
+        await bot.telegram.sendMessage(MY_CHAT_ID, message, { parse_mode: 'Markdown' });
+    } catch (markdownError) {
+        console.error('Cron report Markdown send failed, retrying as plain text:', markdownError);
+        try {
+            await bot.telegram.sendMessage(MY_CHAT_ID, message);
+        } catch (plainError) {
+            console.error('Cron report send failed:', plainError);
+        }
+    }
+}
+
+/**
+ * Logs one due fixed bill and returns its confirmation line (Markdown-escaped), or null when its
+ * unit trust buy is already recorded. Throws only when nothing was written; a later step that
+ * fails (funding transfer, loan balance) is reported as a ⚠️ line under the bill instead, so the
+ * bill isn't listed as "not applied" after its expense was saved.
+ */
+async function logFixedBill(exp: DueFixedExpense): Promise<string | null> {
+    if (await isFixedContributionRecorded(exp)) return null;
+    const md = escapeMarkdown;
+    const amount = `${exp.currency} ${exp.amount}`;
+    const warnings: string[] = [];
+    const lineWithWarnings = (details: string) =>
+        `\n- ${md(exp.description)} (${amount}${details})` +
+        warnings.map((w) => `\n   ⚠️ ${md(w)}`).join('');
+
+    // 3.5: a unit trust bill records its expense, the holding buy and the funding transfer in one
+    // transaction. The Dashboard's page-load contribution stays as the idempotent fallback.
+    let contributionError: string | null = null;
+    if (exp.instrumentId != null && isInvestmentCategory(exp.category) && !exp.loan) {
+        let contributed = false;
+        try {
+            const result = await contributeFixedExpense(exp.id, exp.date);
+            if (result.skipped) return null;
+            contributed = true;
+        } catch (error) {
+            contributionError = errorText(error);
+        }
+        if (contributed) {
+            // contributeFixedExpense succeeds only when every account set on the bill resolves, and
+            // writes the transfer only when both do.
+            const buyFrom = resolvePaymentMethod(exp.paymentMethod);
+            const buyTo = resolvePaymentMethod(exp.toInvestmentAccount);
+            const holding = await getInstrumentById(exp.instrumentId).catch(() => null);
+            const via = buyFrom ? ` via ${md(buyFrom)}` : '';
+            const toFund = buyFrom && buyTo ? ` → ${md(buyTo)}` : '';
+            return lineWithWarnings(`${via}${toFund} · ${md(holding?.name ?? `holding #${exp.instrumentId}`)}`);
+        }
+        // Not "record the buy on the Dashboard": a manual buy there would add a second expense.
+        warnings.push(
+            `holding buy not recorded (${contributionError}): logged the expense only. Fix the bill, then open Cashflow or Setup to add the buy`
+        );
+    }
+
+    // keepRaw: a bill whose account no longer resolves keeps that name on the expense instead of
+    // being saved with no account ("Cash" is an active account, so it resolves normally).
+    let expenseId: number;
+    try {
+        expenseId = await appendExpense(
+            exp.date,
+            exp.amount,
+            exp.currency,
+            exp.category,
+            exp.description,
+            exp.paymentMethod,
+            undefined,
+            { keepRaw: true }
+        );
+    } catch (error) {
+        throw new Error(
+            contributionError
+                ? `holding buy failed (${contributionError}); expense failed (${errorText(error)})`
+                : errorText(error)
+        );
+    }
+
+    const from = resolvePaymentMethod(exp.paymentMethod);
+    if (exp.paymentMethod && !from) {
+        warnings.push(`'${exp.paymentMethod}' is not an active account: stored as text, fix the bill in Setup`);
+    }
+
+    // 3.14: Investment bills and "Other" bills with a destination both get the linked transfer.
+    const dest = fundingDestination(exp.category, exp.paymentMethod, exp.toInvestmentAccount);
+    let toFund = '';
+    if (dest && exp.paymentMethod) {
+        const fundingTo = resolvePaymentMethod(dest);
+        if (!from || !fundingTo) {
+            warnings.push(`transfer to '${dest}' skipped: account '${!from ? exp.paymentMethod : dest}' not found`);
+        } else {
+            try {
+                await upsertInvestmentFundingTransfer({
+                    expenseId,
+                    date: exp.date,
+                    amount: exp.amount,
+                    description: exp.description,
+                    fromPaymentMethod: from,
+                    toInvestmentAccount: fundingTo,
+                });
+                toFund = ` → ${md(fundingTo)}`;
+            } catch (error) {
+                warnings.push(`transfer to ${fundingTo} not logged: ${errorText(error)}`);
+            }
+        }
+    } else if (dest) {
+        warnings.push(`transfer to '${dest}' skipped: the bill has no payment account`);
+    } else if (isInvestmentCategory(exp.category)) {
+        warnings.push('transfer skipped: the bill has no destination investment account, set it in Setup');
+    }
+
+    let loanNote = '';
+    if (exp.loan) {
+        try {
+            const applied = await applyLoanPayment({ fixedExpenseId: exp.id, date: exp.date, expenseId });
+            if (applied) {
+                loanNote = ` · interest ${applied.interest.toFixed(2)} / principal ${applied.principal.toFixed(2)} / left ${applied.remainingAfter.toFixed(2)}`;
+            }
+        } catch (error) {
+            warnings.push(`loan balance not updated: ${errorText(error)}`);
+        }
+    }
+
+    const via = exp.paymentMethod ? ` via ${md(exp.paymentMethod)}` : '';
+    return lineWithWarnings(`${via}${toFund}${loanNote}`);
 }
 
 bot.command('setprotein', async (ctx) => {
@@ -147,81 +313,46 @@ bot.command('settargets', async (ctx) => {
 async function main() {
     await loadExpenseCategories();
     await loadPaymentAccounts();
-    plannerModel = createPlannerModel(genAI);
-    defaultModel = createDomainModel(genAI, 'expense');
-    heavyModel = createDomainModel(genAI, 'expense', { heavy: true });
+    buildModels();
 
     cron.schedule(
         '0 9 * * *',
         async () => {
+            await refreshFinanceCaches();
             try {
                 const expensesToLog = await getFixedExpensesForToday();
                 if (expensesToLog.length === 0) return;
 
                 console.log(`Found ${expensesToLog.length} fixed expenses for today. Logging...`);
                 let loggedList = '';
+                let notApplied = '';
 
+                // Each bill on its own: one bad bill is listed under "not applied" and the rest still log.
                 for (const exp of expensesToLog) {
-                    if (await isFixedContributionRecorded(exp)) continue;
-                    const expenseId = await appendExpense(
-                        exp.date,
-                        exp.amount,
-                        exp.currency,
-                        exp.category,
-                        exp.description,
-                        exp.paymentMethod
-                    );
-                    // getFixedExpensesForToday now returns display text (raw for an account that no longer
-                    // resolves). Add the transfer only when both accounts resolve, as before the sync, so one
-                    // stale bill can't throw and stop the rest of today's bills. 3.2/3.5 replace this loop.
-                    const fundingFrom = resolvePaymentMethod(exp.paymentMethod);
-                    const fundingTo = resolvePaymentMethod(exp.toInvestmentAccount);
-                    const isInvestment = exp.category.toLowerCase() === 'investment';
-                    const transferWritten = isInvestment && !!fundingFrom && !!fundingTo;
-                    if (transferWritten) {
-                        await upsertInvestmentFundingTransfer({
-                            expenseId,
-                            date: exp.date,
-                            amount: exp.amount,
-                            description: exp.description,
-                            fromPaymentMethod: fundingFrom,
-                            toInvestmentAccount: fundingTo,
-                        });
+                    try {
+                        const line = await logFixedBill(exp);
+                        if (line) loggedList += line;
+                    } catch (billError) {
+                        console.error(`Fixed bill #${exp.id} (${exp.description}) not applied:`, billError);
+                        notApplied += `\n- ${escapeMarkdown(exp.description)} (${exp.currency} ${exp.amount}): ${escapeMarkdown(errorText(billError))}`;
                     }
-                    let loanNote = '';
-                    if (exp.loan) {
-                        const applied = await applyLoanPayment({
-                            fixedExpenseId: exp.id,
-                            date: exp.date,
-                            expenseId,
-                        });
-                        if (applied) {
-                            loanNote = ` · interest ${applied.interest.toFixed(2)} / principal ${applied.principal.toFixed(2)} / left ${applied.remainingAfter.toFixed(2)}`;
-                        }
-                    }
-                    // Say only what was stored: appendExpense saved the resolved account (none for a stale
-                    // name), and the transfer exists only when both accounts resolved.
-                    const via = fundingFrom
-                        ? ` via ${fundingFrom}`
-                        : exp.paymentMethod
-                          ? ` (account '${exp.paymentMethod}' not found, logged without account)`
-                          : '';
-                    const toFund = transferWritten
-                        ? ` → ${fundingTo}`
-                        : isInvestment && exp.toInvestmentAccount && !fundingTo
-                          ? ` (transfer to '${exp.toInvestmentAccount}' skipped: account not found)`
-                          : '';
-                    loggedList += `\n- ${exp.description} (${exp.currency} ${exp.amount}${via}${toFund}${loanNote})`;
                 }
 
-                if (!loggedList) return;
+                if (!loggedList && !notApplied) return;
 
-                const msg = `🗓️ *Automated Billing:* Good morning! I just logged today's scheduled expenses:${loggedList}`;
-                await bot.telegram.sendMessage(MY_CHAT_ID, msg, { parse_mode: 'Markdown' });
+                let msg = loggedList
+                    ? `🗓️ *Automated Billing:* Good morning! I just logged today's scheduled expenses:${loggedList}`
+                    : `🗓️ *Automated Billing:* Good morning! None of today's scheduled expenses could be logged.`;
+                if (notApplied) {
+                    msg += `\n\n⚠️ *Not applied* (nothing saved for these, log them by hand once fixed):${notApplied}`;
+                }
+                await sendCronReport(msg);
             } catch (error) {
+                // Only reached before any bill was tried; bill errors are caught per bill above.
                 console.error('Cron Job Error:', error);
-                const detail = error instanceof Error ? error.message : String(error);
-                await notifyOwner(`🚨 *Automated Billing failed:* Today's fixed expenses were NOT logged.\n${detail}`);
+                await notifyOwner(
+                    `🚨 *Automated Billing failed:* Today's fixed expenses were NOT logged.\n${escapeMarkdown(errorText(error))}`
+                );
             }
         },
         { timezone: 'Asia/Kuala_Lumpur' }
@@ -230,27 +361,40 @@ async function main() {
     cron.schedule(
         '0 9 * * *',
         async () => {
+            await refreshFinanceCaches();
             try {
                 const schedulesDue = await getInterestSchedulesForToday();
                 if (schedulesDue.length === 0) return;
 
                 console.log(`Found ${schedulesDue.length} interest schedules for today. Accruing...`);
                 let loggedList = '';
+                let notApplied = '';
 
+                // Each schedule on its own, so one failure doesn't stop (or hide) the others.
                 for (const sched of schedulesDue) {
-                    const result = await accrueInterestForSchedule(sched);
-                    if (!result) continue;
-                    loggedList += `\n- ${sched.description} (${sched.currency} ${result.amount.toFixed(2)} → ${sched.paymentMethod})`;
+                    try {
+                        const result = await accrueInterestForSchedule(sched);
+                        if (!result) continue;
+                        loggedList += `\n- ${escapeMarkdown(sched.description)} (${sched.currency} ${result.amount.toFixed(2)} → ${escapeMarkdown(sched.paymentMethod)})`;
+                    } catch (schedError) {
+                        console.error(`Interest schedule #${sched.id} (${sched.description}) not accrued:`, schedError);
+                        notApplied += `\n- ${escapeMarkdown(sched.description)}: ${escapeMarkdown(errorText(schedError))}`;
+                    }
                 }
 
-                if (!loggedList) return;
+                if (!loggedList && !notApplied) return;
 
-                const msg = `💰 *Interest accrued:* Good morning! I just logged today's scheduled interest:${loggedList}`;
-                await bot.telegram.sendMessage(MY_CHAT_ID, msg, { parse_mode: 'Markdown' });
+                let msg = loggedList
+                    ? `💰 *Interest accrued:* Good morning! I just logged today's scheduled interest:${loggedList}`
+                    : `💰 *Interest accrued:* Good morning! None of today's scheduled interest could be logged.`;
+                if (notApplied) msg += `\n\n⚠️ *Not accrued:*${notApplied}`;
+                await sendCronReport(msg);
             } catch (error) {
+                // Only reached before any schedule was tried; schedule errors are caught above.
                 console.error('Interest Cron Job Error:', error);
-                const detail = error instanceof Error ? error.message : String(error);
-                await notifyOwner(`🚨 *Interest accrual failed:* Today's scheduled interest was NOT accrued.\n${detail}`);
+                await notifyOwner(
+                    `🚨 *Interest accrual failed:* Today's scheduled interest was NOT accrued.\n${escapeMarkdown(errorText(error))}`
+                );
             }
         },
         { timezone: 'Asia/Kuala_Lumpur' }
@@ -522,7 +666,16 @@ async function runDomainTurn(
     return runChatTurn(chat, ctx, parts, userId, toolOptions, allowedTools);
 }
 
-async function handleChatOnly(ctx: import('telegraf').Context, contextPrompt: string) {
+/**
+ * No specialist was picked (the SKIP_PLANNER heuristics, or the planner said chat). The planner
+ * model answers with route_request: when that names specialists, they are returned for the caller
+ * to run (the heuristics missed the message; no extra Gemini call). Otherwise this replies itself
+ * and returns [].
+ */
+async function handleChatOnly(
+    ctx: import('telegraf').Context,
+    contextPrompt: string
+): Promise<SpecialistDomain[]> {
     let result;
     try {
         const chat = startChatWithRetry(plannerModel);
@@ -532,6 +685,11 @@ async function handleChatOnly(ctx: import('telegraf').Context, contextPrompt: st
         const heavyChat = startChatWithRetry(createPlannerModel(genAI, { heavy: true }), 0);
         result = await heavyChat.sendMessage(contextPrompt);
     }
+    const routed = filterSpecialistDomains(plannerRouteDomains(result.response.functionCalls()) ?? []);
+    if (routed.length > 0) {
+        console.log('🧭 Chat fallback → planner routed:', routed.join(', '));
+        return routed;
+    }
     const aiText = result.response.text();
     if (aiText?.trim()) {
         await ctx.reply(aiText);
@@ -540,6 +698,7 @@ async function handleChatOnly(ctx: import('telegraf').Context, contextPrompt: st
             'How can I help? I can log expenses, meals, workouts, or calendar events.'
         );
     }
+    return [];
 }
 
 async function routeAndExecute(
@@ -604,11 +763,13 @@ async function routeAndExecute(
         }
     }
 
-    const specialists = filterSpecialistDomains(domains);
+    let specialists = filterSpecialistDomains(domains);
     if (specialists.length === 0) {
-        await handleChatOnly(ctx, contextPrompt);
-        userSessions.delete(userId);
-        return;
+        specialists = await handleChatOnly(ctx, contextPrompt);
+        if (specialists.length === 0) {
+            userSessions.delete(userId);
+            return;
+        }
     }
 
     // A bare photo with no price/payment text is ambiguous—could be a receipt or
@@ -623,6 +784,8 @@ async function routeAndExecute(
 
     // Only the expense specialist needs trip dates/currencies (to read "32k" as VND etc.).
     const tripHint = specialists.includes('expense') ? await buildTripContextHint(klIsoDate()) : '';
+    // Active unit trust names for invest_in_fund / withdraw_from_fund (expense) and add_fixed_expense (financeConfig).
+    const holdingsHints = await buildHoldingsContextHints(specialists);
 
     // Each specialist has its own chat session and replies independently, so run
     // them concurrently — a food-photo turn (expense + meal) costs one turn of
@@ -630,7 +793,8 @@ async function routeAndExecute(
     const runSpecialist = async (
         domain: SpecialistDomain
     ): Promise<'complete' | 'awaiting_input'> => {
-        const domainPrompt = domain === 'expense' ? contextPrompt + tripHint : contextPrompt;
+        const domainPrompt =
+            (domain === 'expense' ? contextPrompt + tripHint : contextPrompt) + (holdingsHints[domain] ?? '');
         const specialistParts =
             mediaParts.length > 0 ? [...mediaParts, domainPrompt] : domainPrompt;
         const heavy = options?.heavy && domain === 'expense';
