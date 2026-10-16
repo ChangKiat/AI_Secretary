@@ -1,4 +1,11 @@
-import { applyMoneyRoutingHints, isExpenseLedger, routeByHeuristics } from './router';
+import {
+    applyMoneyRoutingHints,
+    breaksAwaitingPin,
+    getOrCreateSession,
+    isExpenseLedger,
+    routeByHeuristics,
+    type UserChatState,
+} from './router';
 import { setPaymentAccountsCache } from '../config/paymentMethods';
 import type { PaymentAccount } from '../services/paymentAccountService';
 
@@ -170,5 +177,31 @@ for (const spend of [
 expectRoute('dinner later with friends', ['meal']);
 setPaymentAccountsCache([account(1, 'Cash'), account(8, 'Boost')]);
 expectRoute('lunch 15 boost', ['expense', 'meal']);
+
+// Awaiting-input pins: a clearly off-domain message breaks the pin (the 9:27pm gym log a
+// pinned meal chat refused); bare answers and same-domain messages stay pinned.
+const gymLog = 'Squat 15\nLeg press 40\nseated leg curl 50\nHip abduction outter 75\nStanding calf raise 75';
+assert(breaksAwaitingPin(gymLog, 'meal'), 'gym log breaks a meal pin');
+assert(!breaksAwaitingPin(gymLog, 'workout'), 'gym log stays with a workout pin');
+assert(!breaksAwaitingPin('3rd and 4th is lunch', 'meal'), 'receipt-item answer stays pinned to meal');
+assert(!breaksAwaitingPin('86', 'meal'), 'bare weigh-in number stays pinned to meal');
+assert(!breaksAwaitingPin('cash', 'expense'), 'account answer stays pinned to expense');
+assert(breaksAwaitingPin('had nasi lemak', 'workout'), 'food log breaks a workout pin');
+
+// A stale awaiting-input session expires by TTL even on turn 1 — it must not pin the next
+// message (possibly days later) to the domain that asked the unanswered question.
+const ttlMs = 10 * 60 * 1000;
+const sessions = new Map<number, UserChatState>();
+const stale = getOrCreateSession(1, sessions, 2, 8, ttlMs);
+stale.awaitingInput = true;
+stale.activeDomain = 'meal';
+stale.lastActiveAt = Date.now() - ttlMs - 1;
+const fresh = getOrCreateSession(1, sessions, 2, 8, ttlMs);
+assert(!fresh.awaitingInput && fresh.turnCount === 1, 'stale awaiting session expires by TTL on turn 1');
+const active = getOrCreateSession(2, sessions, 2, 8, ttlMs);
+active.awaitingInput = true;
+active.activeDomain = 'meal';
+const kept = getOrCreateSession(2, sessions, 2, 8, ttlMs);
+assert(kept.awaitingInput && kept.turnCount === 2, 'recent awaiting session is kept');
 
 console.log('money_routing_check: ok');

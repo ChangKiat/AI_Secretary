@@ -177,8 +177,13 @@ export function applyMoneyRoutingHints(text: string, domains: RouteDomain[]): Ro
  * ponytail: regex heuristics miss ambiguous phrasing; upgrade path = restore planner or a tiny classifier.
  */
 export function routeByHeuristics(text: string, hasMedia: boolean): RouteDomain[] {
+    const next = heuristicDomains(text, hasMedia);
+    console.log('🧭 Heuristic routed:', next.join(', '));
+    return next;
+}
+
+function heuristicDomains(text: string, hasMedia: boolean): RouteDomain[] {
     if (FINANCE_CONFIG_SIGNAL.test(text)) {
-        console.log('🧭 Heuristic routed: financeConfig');
         return ['financeConfig'];
     }
 
@@ -216,8 +221,20 @@ export function routeByHeuristics(text: string, hasMedia: boolean): RouteDomain[
     }
     if (next.length === 0) next = ['chat'];
 
-    console.log('🧭 Heuristic routed:', next.join(', '));
     return next;
+}
+
+/**
+ * An awaiting-input session pins the next message to the asking specialist so bare answers
+ * ("3 and 4", "86", "cash") land in the right chat. But a message whose keywords all belong
+ * to OTHER domains (a gym log while meal awaits a receipt answer) is not an answer: it must
+ * break the pin and route normally, or the pinned specialist refuses it and the log is lost.
+ * hasMedia is deliberately false here — a bare photo's expense+meal fallback is a guess, not
+ * a signal strong enough to break a pin.
+ */
+export function breaksAwaitingPin(text: string, activeDomain: SpecialistDomain): boolean {
+    const specialists = filterSpecialistDomains(heuristicDomains(text, false));
+    return specialists.length > 0 && !specialists.includes(activeDomain);
 }
 
 export async function routeMessage(
@@ -295,7 +312,11 @@ export function getOrCreateSession(
 
     if (existing) {
         const idle = now - existing.lastActiveAt;
-        const expiredByTtl = idle > ttlMs && existing.turnCount >= minTurns;
+        // An awaiting-input session expires by idle time alone: with turnCount < minTurns it
+        // would otherwise never expire, pinning every later message (hours or days on) to the
+        // domain that asked the unanswered question.
+        const expiredByTtl =
+            idle > ttlMs && (existing.awaitingInput || existing.turnCount >= minTurns);
         if (expiredByTtl || existing.turnCount >= maxTurns) {
             sessions.delete(userId);
         } else {

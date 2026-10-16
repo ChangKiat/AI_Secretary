@@ -57,6 +57,7 @@ import { parseMaxPx, resizeForGemini } from './utils/imageForGemini';
 import {
     routeMessage,
     routeByHeuristics,
+    breaksAwaitingPin,
     getOrCreateSession,
     getOrCreateDomainChat,
     invalidateDomainChats,
@@ -724,6 +725,21 @@ async function routeAndExecute(
         replyTarget: replyCtx.replyTarget,
     };
 
+    // A pinned (awaiting-input) session catches bare answers, but a message whose keywords
+    // all belong to other domains (a gym log while meal awaits a receipt answer) is not an
+    // answer: unpin so normal routing runs instead of the pinned specialist refusing it.
+    if (
+        !options?.forceDomains &&
+        !replyCtx.replyTarget &&
+        session.awaitingInput &&
+        session.activeDomain &&
+        breaksAwaitingPin(textForContext, session.activeDomain)
+    ) {
+        console.log(`🧭 Awaiting ${session.activeDomain}, but message signals another domain — unpinned`);
+        session.awaitingInput = false;
+        session.activeDomain = undefined;
+    }
+
     let domains: import('./routing/router').RouteDomain[];
     if (options?.forceDomains) {
         domains = options.forceDomains;
@@ -733,6 +749,7 @@ async function routeAndExecute(
         domains = [REPLY_TARGET_DOMAIN[replyCtx.replyTarget.type]];
         console.log(`🧭 Reply to ${replyCtx.replyTarget.type} #${replyCtx.replyTarget.id} →`, domains[0]);
     } else if (session.awaitingInput && session.activeDomain) {
+        console.log('🧭 Awaiting input →', session.activeDomain);
         domains = [session.activeDomain];
     } else if (SKIP_PLANNER) {
         domains = routeByHeuristics(textForContext, mediaParts.length > 0);
