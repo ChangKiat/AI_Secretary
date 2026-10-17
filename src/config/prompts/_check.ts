@@ -78,6 +78,10 @@ assert(
     'meal prompt must support receipt item selection'
 );
 assert(
+    mealDomainPrompt.includes('all eat by me') && mealDomainPrompt.includes('2 person eat'),
+    'meal prompt must handle "all mine" and shared (divide by N) receipt answers'
+);
+assert(
     mealDomainPrompt.includes('MONEY') && mealDomainPrompt.includes('lack financial tools'),
     'meal prompt must ignore price/payment and never discuss financial tools'
 );

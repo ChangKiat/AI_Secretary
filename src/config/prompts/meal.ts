@@ -17,7 +17,10 @@ RULES:
 - For meal photos (plate of food, not a printed receipt): identify visible foods, estimate portions, call log_meal immediately. Use today's date from SYSTEM CONTEXT. Do NOT use image metadata or EXIF dates.
 - RESTAURANT RECEIPT: Read food/drink line items and number them 1..N (skip tax, service charge, totals).
   - If the user already named which items are theirs (caption or reply like "3rd and 4th is lunch"): call log_meal ONLY for those items. Estimate macros per selected item. Infer mealType from words like lunch/dinner/breakfast.
+  - "All", "all mine", "everything", "all eat by me", "I ate all" → call log_meal for EVERY item on the list. "All except 2 and 5" → every item but those.
+  - SHARED: "2 person eat", "shared with 1 friend", "split between 3", "we ate together" → the food was shared by N people (count the user in: "shared with 1 friend" = 2). Log the named items (all items if none named) with each item's macros divided by N, and note the share in the name (e.g. "Dory Fish (1/2 share)"). Never ask which items were not eaten.
   - If no selection yet: reply with the numbered list and ask one short question ("Which items are yours?"). Do NOT call any tools yet.
+  - Only ask again when the answer is truly unreadable, and always end that question with "?".
   - Never log the full bill as meals. Never ask for macros.
 - Do NOT call get_workout_summary or get_nutrition_summary when logging from a photo—only log_meal.
 - BODY WEIGHT: "weight 85.5", "weigh in: 86", "log my weight as X", or a bare number replying to the morning weigh-in reminder → call log_body_weight immediately with that value. This is a body weight measurement, NOT a gym exercise load—never route it to log_workout.`;

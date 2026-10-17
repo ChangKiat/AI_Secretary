@@ -461,21 +461,27 @@ function buildContextPrompt(userMessage: string): string {
         [MESSAGE]: ${userMessage}`;
 }
 
-function getReplyToText(ctx: import('telegraf').Context): string | undefined {
+function getReplyToMessage(ctx: import('telegraf').Context): { text: string; fromBot: boolean } | undefined {
     const msg = ctx.message;
     if (!msg || !('reply_to_message' in msg) || !msg.reply_to_message) return undefined;
     const replied = msg.reply_to_message;
-    if ('text' in replied && replied.text) return replied.text;
+    if ('text' in replied && replied.text) return { text: replied.text, fromBot: replied.from?.is_bot === true };
     return undefined;
 }
+
+/** The meal specialist's numbered receipt list (meal prompt: "Which items are yours?"). */
+const RECEIPT_ITEM_LIST = /which items are yours\?/i;
 
 async function buildReplyRecordContext(ctx: import('telegraf').Context): Promise<{
     replyToExpenseId?: number;
     replyTarget?: import('./services/incomeService').ReplyRecordTarget;
+    /** Replying to the receipt item list: the answer belongs to meal even if its chat was reset. */
+    replyToReceiptList?: boolean;
     promptHint: string;
 }> {
-    const replyText = getReplyToText(ctx);
-    if (!replyText) return { promptHint: '' };
+    const reply = getReplyToMessage(ctx);
+    if (!reply) return { promptHint: '' };
+    const replyText = reply.text;
     const userId = ctx.from?.id;
     let workoutSession: Awaited<ReturnType<typeof getWorkoutSessionRows>> = [];
     const target = await resolveReplyRecord(replyText, async (t) => {
@@ -486,7 +492,15 @@ async function buildReplyRecordContext(ctx: import('telegraf').Context): Promise
         }
         return (await getMealById(t.id, userId)) != null;
     });
-    if (!target) return { promptHint: '' };
+    if (!target) {
+        if (!reply.fromBot) return { promptHint: '' };
+        // A bot question with no record id (the receipt item list): quote it, so the answer
+        // ("all eat by me", "2 person eat") still makes sense to a fresh specialist chat.
+        return {
+            replyToReceiptList: RECEIPT_ITEM_LIST.test(replyText),
+            promptHint: `\n[REPLY CONTEXT] User is replying to your earlier message:\n"""\n${replyText}\n"""`,
+        };
+    }
 
     let editHint = `For corrections use edit_${target.type}/delete_${target.type} with this id.`;
     if (target.type === 'workout') {
@@ -507,6 +521,12 @@ async function buildReplyRecordContext(ctx: import('telegraf').Context): Promise
         replyTarget: target,
         promptHint: `\n[REPLY CONTEXT] User is replying to ${target.type} #${target.id}. ${editHint}${expenseExtra}`,
     };
+}
+
+/** "…?" or a question phrased as a request ("Please clarify which items…."). */
+function isClarifyingQuestion(text: string): boolean {
+    const trimmed = text.trim();
+    return trimmed.endsWith('?') || /^(?:please\s+)?(?:clarify|specify|confirm|let me know)\b/im.test(trimmed);
 }
 
 async function runChatTurn(
@@ -643,7 +663,7 @@ async function runChatTurn(
         // A genuine clarifying question (e.g. numbered receipt items, "what time?")
         // needs a follow-up reply. A flat statement/refusal does not — staying
         // "awaiting" would force the next, unrelated message into this same domain.
-        return aiText.trim().endsWith('?') ? 'awaiting_input' : 'complete';
+        return isClarifyingQuestion(aiText) ? 'awaiting_input' : 'complete';
     }
     await ctx.reply("I processed that, but I couldn't find anything to log or report.");
     return 'complete';
@@ -748,6 +768,9 @@ async function routeAndExecute(
         // for the router—the record type alone says who owns the correction.
         domains = [REPLY_TARGET_DOMAIN[replyCtx.replyTarget.type]];
         console.log(`🧭 Reply to ${replyCtx.replyTarget.type} #${replyCtx.replyTarget.id} →`, domains[0]);
+    } else if (replyCtx.replyToReceiptList) {
+        domains = ['meal'];
+        console.log('🧭 Reply to receipt item list → meal');
     } else if (session.awaitingInput && session.activeDomain) {
         console.log('🧭 Awaiting input →', session.activeDomain);
         domains = [session.activeDomain];
