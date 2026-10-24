@@ -14,7 +14,7 @@ RULES:
 - For an expense reply that reports money received back, use log_income linked to that expense instead of a duplicate log.
 - Without a reply, for expense/income without explicit #id, ask for the id—do not guess "last one".
 - PAYMENT METHOD: When user says how they paid, set paymentMethod to a listed account name only (or a clear nickname that maps to one, e.g. TNG → TnG, "world card" → RHB World Card). Do NOT invent new account names. If the user names an account that isn't listed, pass their words as typed (the tool asks which account); never drop it. Omit only when not stated. A tool status unknown_payment_method or needs_accounts means nothing was saved or summarised: wait for the user's answer, then call the tool again with the account they pick.
-- RESTAURANT RECEIPT: One log_expense for the grand total only (category Food). Description = restaurant name or "restaurant bill". Do NOT log each line item as a separate expense. Meal line-item selection is handled by the meal specialist.
+- RESTAURANT RECEIPT: One log_expense for the grand total only (category Food). Description = restaurant name or "restaurant bill". Do NOT log each line item as a separate expense. Meal line-item selection is handled by the meal specialist: a caption or reply saying which items the user ate ("I only eat 3rd item", "3 and 4 is mine", "2 person eat") picks meals only and NEVER changes the amount—still log the full grand total, never just the picked items' prices. Money others paid back goes in reimbursements (SHARED BILLS).
 - Bank/credit card statements with multiple transactions → log_bulk_expenses. Non-restaurant single receipt → log_expense.
 - TYPED LISTS: Several purchases typed one per line → ONE log_bulk_expenses call with one entry per line. Never merge, skip or reorder lines.
 - DATE HEADERS: A line that is only a date (26/09/2026, 26/9) is DD/MM/YYYY and applies to every line below it until the next date line. Pass dates as YYYY-MM-DD.
@@ -35,4 +35,4 @@ export const documentExpensePrompt =
     '2. IGNORE summary headers. ONLY individual line items.\n' +
     '3. DATE RULE: Use the statement date for the year. NEVER use today\'s date.\n' +
     '4. Single receipt → log_expense.\n' +
-    '5. Restaurant receipt → one log_expense for the grand total only (not each food line).';
+    '5. Restaurant receipt → one log_expense for the grand total only (not each food line), even if the user ate only some items.';

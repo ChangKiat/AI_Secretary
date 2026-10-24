@@ -198,11 +198,9 @@ function heuristicDomains(text: string, hasMedia: boolean): RouteDomain[] {
     const asksBurn = BURN_SIGNAL.test(text);
     // With "burn", "calories" is energy burned, not food: it alone doesn't bring in meal.
     const foodText = asksBurn ? text.replace(/\bcalories?\b/gi, ' ') : text;
-    if (SPECIFIC_FOOD_SIGNAL.test(foodText) || BODY_WEIGHT_SIGNAL.test(text) || PROFILE_SIGNAL.test(text)) {
-        push('meal');
-    } else if (GENERIC_MEAL_SIGNAL.test(text) && !hasScheduleSignal) {
-        push('meal');
-    }
+    const hasFoodSignal =
+        SPECIFIC_FOOD_SIGNAL.test(foodText) || (GENERIC_MEAL_SIGNAL.test(text) && !hasScheduleSignal);
+    if (hasFoodSignal || BODY_WEIGHT_SIGNAL.test(text) || PROFILE_SIGNAL.test(text)) push('meal');
     // "set my weight to 80kg" is a weigh-in, not workout sets: only meal saves it.
     const workoutText = BODY_WEIGHT_SIGNAL.test(text) ? text.replace(/\bsets?\b/gi, ' ') : text;
     if (WORKOUT_SIGNAL.test(workoutText) || asksBurn) push('workout');
@@ -211,6 +209,9 @@ function heuristicDomains(text: string, hasMedia: boolean): RouteDomain[] {
     // food photo (e.g. "tng rm14") would otherwise miss the meal log entirely.
     // Mirrors the planner's own instruction: expense (+ meal if food outlet).
     if (hasMedia && domains.includes('expense')) push('meal');
+    // The reverse: a food caption on a photo ("I only eat 3rd item", "lunch") may sit on a
+    // restaurant receipt, whose bill total only expense logs. It stays quiet on a plain plate photo.
+    if (hasMedia && hasFoodSignal) push('expense');
 
     let next = applyMoneyRoutingHints(text, domains);
     if (filterSpecialistDomains(next).length === 0 && hasMedia) {

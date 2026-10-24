@@ -59,6 +59,19 @@ assert(
     'photo + payment-only caption should also include meal (caption alone cannot rule out food)'
 );
 
+// A receipt photo whose caption only picks the user's items must still log the bill total.
+for (const caption of ['I only eat 3rd item', '3 and 4 is mine', 'lunch']) {
+    const photoRoute = routeByHeuristics(caption, true);
+    assert(
+        photoRoute.includes('expense') && photoRoute.includes('meal'),
+        `photo + "${caption}" should include expense and meal (got ${JSON.stringify(photoRoute)})`
+    );
+}
+assert(
+    !routeByHeuristics('weight 85.5', true).includes('expense'),
+    'scale photo + weigh-in caption is not a receipt'
+);
+
 const mixedWorkoutSupplementExpense = routeByHeuristics(
     'squat 15\nDeadlift 5\n\nOne scope myprotein\nLalaport buy waffle kayapandan butter tng rm7',
     false

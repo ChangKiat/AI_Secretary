@@ -70,6 +70,10 @@ assert(
     expensePrompt.includes('grand total') || expensePrompt.includes('RESTAURANT RECEIPT'),
     'expense prompt must log restaurant grand total only'
 );
+assert(
+    expensePrompt.includes('I only eat 3rd item') && expensePrompt.includes('NEVER changes the amount'),
+    'expense prompt must log the full receipt total even when the user ate only some items'
+);
 
 const mealDomainPrompt = buildDomainInstruction('meal', getExpenseCategoryNames());
 assert(
