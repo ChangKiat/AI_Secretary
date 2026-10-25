@@ -3,27 +3,9 @@ import { randomUUID } from 'crypto';
 import { message } from 'telegraf/filters';
 import { GoogleGenerativeAI, GenerativeModel, ChatSession, Part } from '@google/generative-ai';
 import 'dotenv/config';
-import {
-    appendExpense,
-    getFixedExpensesForToday,
-    formatBulkExpenseLogReply,
-    isFixedContributionRecorded,
-    type DueFixedExpense,
-} from './services/expenseService';
-import { contributeFixedExpense } from './services/fixedContributionService';
-import { getInstrumentById } from './services/investmentPortfolioService';
+import { formatBulkExpenseLogReply } from './services/expenseService';
 import { buildTripContextHint, TripLookup } from './services/tripExpenseService';
-import {
-    fundingDestination,
-    isInvestmentCategory,
-    upsertInvestmentFundingTransfer,
-    resolveReplyRecord,
-} from './services/incomeService';
-import {
-    accrueInterestForSchedule,
-    getInterestSchedulesForToday,
-} from './services/interestScheduleService';
-import { applyLoanPayment } from './services/loanService';
+import { resolveReplyRecord } from './services/incomeService';
 import {
     handleToolCall,
     replyInChunks,
@@ -44,7 +26,7 @@ import {
 } from './config/gemini';
 import { documentExpensePrompt } from './config/prompts';
 import { loadExpenseCategories } from './config/expenseCategories';
-import { loadPaymentAccounts, resolvePaymentMethod } from './config/paymentMethods';
+import { loadPaymentAccounts } from './config/paymentMethods';
 import { onFinanceNamesChanged, refreshFinanceCaches } from './config/cacheRefresh';
 import {
     getMealById,
@@ -68,7 +50,6 @@ import {
     UserChatState,
     SpecialistDomain,
 } from './routing/router';
-import cron from 'node-cron';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
@@ -127,151 +108,6 @@ bot.use(async (ctx, next) => {
     return next();
 });
 
-async function notifyOwner(message: string) {
-    try {
-        await bot.telegram.sendMessage(MY_CHAT_ID, message, { parse_mode: 'Markdown' });
-    } catch (notifyError) {
-        console.error('Failed to send owner notification:', notifyError);
-    }
-}
-
-/** Telegram legacy Markdown: escape _ * ` [ in user text so a name can't break the cron messages. */
-function escapeMarkdown(text: string): string {
-    return text.replace(/[_*`[]/g, (ch) => `\\${ch}`);
-}
-
-function errorText(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-}
-
-/** Sends a 9am cron report; never throws. Falls back to plain text if Telegram rejects the Markdown. */
-async function sendCronReport(message: string): Promise<void> {
-    try {
-        await bot.telegram.sendMessage(MY_CHAT_ID, message, { parse_mode: 'Markdown' });
-    } catch (markdownError) {
-        console.error('Cron report Markdown send failed, retrying as plain text:', markdownError);
-        try {
-            await bot.telegram.sendMessage(MY_CHAT_ID, message);
-        } catch (plainError) {
-            console.error('Cron report send failed:', plainError);
-        }
-    }
-}
-
-/**
- * Logs one due fixed bill and returns its confirmation line (Markdown-escaped), or null when its
- * unit trust buy is already recorded. Throws only when nothing was written; a later step that
- * fails (funding transfer, loan balance) is reported as a ⚠️ line under the bill instead, so the
- * bill isn't listed as "not applied" after its expense was saved.
- */
-async function logFixedBill(exp: DueFixedExpense): Promise<string | null> {
-    if (await isFixedContributionRecorded(exp)) return null;
-    const md = escapeMarkdown;
-    const amount = `${exp.currency} ${exp.amount}`;
-    const warnings: string[] = [];
-    const lineWithWarnings = (details: string) =>
-        `\n- ${md(exp.description)} (${amount}${details})` +
-        warnings.map((w) => `\n   ⚠️ ${md(w)}`).join('');
-
-    // 3.5: a unit trust bill records its expense, the holding buy and the funding transfer in one
-    // transaction. The Dashboard's page-load contribution stays as the idempotent fallback.
-    let contributionError: string | null = null;
-    if (exp.instrumentId != null && isInvestmentCategory(exp.category) && !exp.loan) {
-        let contributed = false;
-        try {
-            const result = await contributeFixedExpense(exp.id, exp.date);
-            if (result.skipped) return null;
-            contributed = true;
-        } catch (error) {
-            contributionError = errorText(error);
-        }
-        if (contributed) {
-            // contributeFixedExpense succeeds only when every account set on the bill resolves, and
-            // writes the transfer only when both do.
-            const buyFrom = resolvePaymentMethod(exp.paymentMethod);
-            const buyTo = resolvePaymentMethod(exp.toInvestmentAccount);
-            const holding = await getInstrumentById(exp.instrumentId).catch(() => null);
-            const via = buyFrom ? ` via ${md(buyFrom)}` : '';
-            const toFund = buyFrom && buyTo ? ` → ${md(buyTo)}` : '';
-            return lineWithWarnings(`${via}${toFund} · ${md(holding?.name ?? `holding #${exp.instrumentId}`)}`);
-        }
-        // Not "record the buy on the Dashboard": a manual buy there would add a second expense.
-        warnings.push(
-            `holding buy not recorded (${contributionError}): logged the expense only. Fix the bill, then open Cashflow or Setup to add the buy`
-        );
-    }
-
-    // keepRaw: a bill whose account no longer resolves keeps that name on the expense instead of
-    // being saved with no account ("Cash" is an active account, so it resolves normally).
-    let expenseId: number;
-    try {
-        expenseId = await appendExpense(
-            exp.date,
-            exp.amount,
-            exp.currency,
-            exp.category,
-            exp.description,
-            exp.paymentMethod,
-            undefined,
-            { keepRaw: true }
-        );
-    } catch (error) {
-        throw new Error(
-            contributionError
-                ? `holding buy failed (${contributionError}); expense failed (${errorText(error)})`
-                : errorText(error)
-        );
-    }
-
-    const from = resolvePaymentMethod(exp.paymentMethod);
-    if (exp.paymentMethod && !from) {
-        warnings.push(`'${exp.paymentMethod}' is not an active account: stored as text, fix the bill in Setup`);
-    }
-
-    // 3.14: Investment bills and "Other" bills with a destination both get the linked transfer.
-    const dest = fundingDestination(exp.category, exp.paymentMethod, exp.toInvestmentAccount);
-    let toFund = '';
-    if (dest && exp.paymentMethod) {
-        const fundingTo = resolvePaymentMethod(dest);
-        if (!from || !fundingTo) {
-            warnings.push(`transfer to '${dest}' skipped: account '${!from ? exp.paymentMethod : dest}' not found`);
-        } else {
-            try {
-                await upsertInvestmentFundingTransfer({
-                    expenseId,
-                    date: exp.date,
-                    amount: exp.amount,
-                    description: exp.description,
-                    fromPaymentMethod: from,
-                    toInvestmentAccount: fundingTo,
-                });
-                toFund = ` → ${md(fundingTo)}`;
-            } catch (error) {
-                warnings.push(`transfer to ${fundingTo} not logged: ${errorText(error)}`);
-            }
-        }
-    } else if (dest) {
-        warnings.push(`transfer to '${dest}' skipped: the bill has no payment account`);
-    } else if (isInvestmentCategory(exp.category)) {
-        warnings.push('transfer skipped: the bill has no destination investment account, set it in Setup');
-    }
-
-    let loanNote = '';
-    if (exp.loan) {
-        try {
-            const applied = await applyLoanPayment({ fixedExpenseId: exp.id, date: exp.date, expenseId });
-            if (applied) {
-                loanNote = ` · interest ${applied.interest.toFixed(2)} / principal ${applied.principal.toFixed(2)} / left ${applied.remainingAfter.toFixed(2)}`;
-            }
-        } catch (error) {
-            warnings.push(`loan balance not updated: ${errorText(error)}`);
-        }
-    }
-
-    const via = exp.paymentMethod ? ` via ${md(exp.paymentMethod)}` : '';
-    return lineWithWarnings(`${via}${toFund}${loanNote}`);
-}
-
 bot.command('setprotein', async (ctx) => {
     const text = ctx.message.text.replace('/setprotein', '').trim();
     const target = parseFloat(text);
@@ -316,105 +152,8 @@ async function main() {
     await loadPaymentAccounts();
     buildModels();
 
-    cron.schedule(
-        '0 9 * * *',
-        async () => {
-            await refreshFinanceCaches();
-            try {
-                const expensesToLog = await getFixedExpensesForToday();
-                if (expensesToLog.length === 0) return;
-
-                console.log(`Found ${expensesToLog.length} fixed expenses for today. Logging...`);
-                let loggedList = '';
-                let notApplied = '';
-
-                // Each bill on its own: one bad bill is listed under "not applied" and the rest still log.
-                for (const exp of expensesToLog) {
-                    try {
-                        const line = await logFixedBill(exp);
-                        if (line) loggedList += line;
-                    } catch (billError) {
-                        console.error(`Fixed bill #${exp.id} (${exp.description}) not applied:`, billError);
-                        notApplied += `\n- ${escapeMarkdown(exp.description)} (${exp.currency} ${exp.amount}): ${escapeMarkdown(errorText(billError))}`;
-                    }
-                }
-
-                if (!loggedList && !notApplied) return;
-
-                let msg = loggedList
-                    ? `🗓️ *Automated Billing:* Good morning! I just logged today's scheduled expenses:${loggedList}`
-                    : `🗓️ *Automated Billing:* Good morning! None of today's scheduled expenses could be logged.`;
-                if (notApplied) {
-                    msg += `\n\n⚠️ *Not applied* (nothing saved for these, log them by hand once fixed):${notApplied}`;
-                }
-                await sendCronReport(msg);
-            } catch (error) {
-                // Only reached before any bill was tried; bill errors are caught per bill above.
-                console.error('Cron Job Error:', error);
-                await notifyOwner(
-                    `🚨 *Automated Billing failed:* Today's fixed expenses were NOT logged.\n${escapeMarkdown(errorText(error))}`
-                );
-            }
-        },
-        { timezone: 'Asia/Kuala_Lumpur' }
-    );
-
-    cron.schedule(
-        '0 9 * * *',
-        async () => {
-            await refreshFinanceCaches();
-            try {
-                const schedulesDue = await getInterestSchedulesForToday();
-                if (schedulesDue.length === 0) return;
-
-                console.log(`Found ${schedulesDue.length} interest schedules for today. Accruing...`);
-                let loggedList = '';
-                let notApplied = '';
-
-                // Each schedule on its own, so one failure doesn't stop (or hide) the others.
-                for (const sched of schedulesDue) {
-                    try {
-                        const result = await accrueInterestForSchedule(sched);
-                        if (!result) continue;
-                        loggedList += `\n- ${escapeMarkdown(sched.description)} (${sched.currency} ${result.amount.toFixed(2)} → ${escapeMarkdown(sched.paymentMethod)})`;
-                    } catch (schedError) {
-                        console.error(`Interest schedule #${sched.id} (${sched.description}) not accrued:`, schedError);
-                        notApplied += `\n- ${escapeMarkdown(sched.description)}: ${escapeMarkdown(errorText(schedError))}`;
-                    }
-                }
-
-                if (!loggedList && !notApplied) return;
-
-                let msg = loggedList
-                    ? `💰 *Interest accrued:* Good morning! I just logged today's scheduled interest:${loggedList}`
-                    : `💰 *Interest accrued:* Good morning! None of today's scheduled interest could be logged.`;
-                if (notApplied) msg += `\n\n⚠️ *Not accrued:*${notApplied}`;
-                await sendCronReport(msg);
-            } catch (error) {
-                // Only reached before any schedule was tried; schedule errors are caught above.
-                console.error('Interest Cron Job Error:', error);
-                await notifyOwner(
-                    `🚨 *Interest accrual failed:* Today's scheduled interest was NOT accrued.\n${escapeMarkdown(errorText(error))}`
-                );
-            }
-        },
-        { timezone: 'Asia/Kuala_Lumpur' }
-    );
-
-    cron.schedule(
-        '0 8 * * *',
-        async () => {
-            try {
-                await bot.telegram.sendMessage(
-                    MY_CHAT_ID,
-                    '⚖️ Morning weigh-in — step on the scale and reply like "weight 85.5" to log it.'
-                );
-            } catch (error) {
-                console.error('Weigh-in Reminder Cron Job Error:', error);
-            }
-        },
-        { timezone: 'Asia/Kuala_Lumpur' }
-    );
+    // The daily jobs (8am weigh-in reminder, 9am fixed bills and interest) run on the Dashboard
+    // server, Dashboard/server/dailyJobs.ts, which sends their reports through this bot.
 
     bot.launch(() => {
         console.log('🤖 Secretary Bot is running...');

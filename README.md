@@ -11,7 +11,7 @@ A proactive personal assistant built with Node.js and TypeScript. Uses Google Ge
 - **Calendar**: Create events and check schedule (Google Calendar)
 - **Gym**: Log workouts, view history, get suggestions
 - **Nutrition**: Log meals from photos with protein estimates, daily summaries, meal suggestions
-- **Automated billing**: Cron logs fixed expenses at 9:00 AM (Asia/Kuala_Lumpur)
+- **Automated billing**: Fixed expenses at 9:00 AM, interest accrual and an 8:00 AM weigh-in reminder (Asia/Kuala_Lumpur). These run on the Dashboard server (`Dashboard/server/dailyJobs.ts`) and report here through this bot; the bot itself no longer schedules anything.
 
 ## Prerequisites
 
@@ -73,6 +73,7 @@ Back up first (Supabase → Database → Backups, or `pg_dump`). Check which col
 24. `migrate-transfer-fee.sql`: `incomes.transfer_fee`. Needs 3. **Not repeatable:** it re-adds the Bank charges budget if no budget of that name exists (in any letter case).
 25. `migrate-daily-activity.sql`: `user_settings.height_cm/age/sex` and `daily_activity_logs`.
 26. `migrate-fx-rate-precision.sql`: widens `expenses.fx_rate` to `numeric(20,12)`. Needs 17. **Run it manually before deploying** any build whose `schema.ts` declares the wider `fx_rate`.
+27. `migrate-scheduled-job-runs.sql`: `scheduled_job_runs`, the Dashboard scheduler's record of which days each daily job ran. Run it before deploying a Dashboard with `SCHEDULER_ENABLED=1`.
 
 The Dashboard repo keeps one optional personal seed, `Dashboard/scripts/seed-car-service-visits.sql`. Run it once, after 23; a re-run skips visits that already exist.
 
