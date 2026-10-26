@@ -82,8 +82,14 @@ if (!connectionString) {
 
 
 // Supabase's transaction pooler (port 6543) does not support prepared statements.
+// Its session pooler (port 5432) allows only 15 connections, shared by the bot and the
+// Dashboard, so keep each pool small and hand idle connections back after 20 seconds.
 const client = connectionString
-    ? postgres(connectionString, { prepare: new URL(connectionString).port !== '6543' })
+    ? postgres(connectionString, {
+          prepare: new URL(connectionString).port !== '6543',
+          max: 5,
+          idle_timeout: 20,
+      })
     : null;
 
 export const db = client ? drizzle(client, { schema }) : null;
