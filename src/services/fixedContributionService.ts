@@ -43,7 +43,7 @@ export async function resolveContributionHolding(
 }
 
 /**
- * The expense the Telegram bot's 9am fixed-bill cron already logged for this bill,
+ * The expense the 9am fixed-bill job (Dashboard server/dailyJobs.ts) already logged for this bill,
  * when no holding buy has claimed it yet.
  */
 async function findUnclaimedBillExpense(

@@ -11,8 +11,8 @@ import type { PaymentAccount } from '../services/paymentAccountService';
 
 /**
  * Payment accounts and expense categories are edited on the Dashboard while the bot runs.
- * refreshFinanceCaches() reloads them at most this often (it runs on every incoming update and
- * at the start of the 9am crons), so a card added on the Dashboard resolves without a restart.
+ * refreshFinanceCaches() reloads them at most this often (it runs on every incoming update), so
+ * a card added on the Dashboard resolves without a restart.
  */
 export const FINANCE_CACHE_TTL_MS = 60_000;
 
@@ -73,7 +73,7 @@ function syncNames(): boolean {
 }
 
 /**
- * Every update (auth middleware) and both 9am crons await the shared in-flight reload, so a hung
+ * Every update (auth middleware) awaits the shared in-flight reload, so a hung
  * SELECT must not stall them: after this long the reload is abandoned and the cached lists are kept.
  * The loaders apply their own result, so a late one still lands and the next syncNames() reports it.
  */

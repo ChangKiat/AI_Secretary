@@ -598,19 +598,20 @@ function isFixedExpenseDueOn(
     return isFrequencyDue(row.startMonth, row.frequencyMonths, month);
 }
 
-export async function getFixedExpensesForToday(): Promise<DueFixedExpense[]> {
+/**
+ * Active fixed bills due on `dateStr` (YYYY-MM-DD, KL calendar day), each dated that day.
+ * The Dashboard's 9am job passes today, or an earlier day it missed.
+ */
+export async function getFixedExpensesDueOn(dateStr: string): Promise<DueFixedExpense[]> {
     const db = requireDb();
-    const today = todayInKL();
-    const dateStr = formatDateForDb();
+    const [year, month, day] = dateStr.split('-').map(Number);
 
     const rows = await db
         .select()
         .from(fixedExpenses)
         .where(eq(fixedExpenses.active, true));
 
-    const due = rows.filter((row) =>
-        isFixedExpenseDueOn(row, today.getFullYear(), today.getMonth() + 1, today.getDate())
-    );
+    const due = rows.filter((row) => isFixedExpenseDueOn(row, year, month, day));
 
     const loanIds = due.filter((row) => parseLoanMethod(row.loanMethod)).map((row) => row.id);
     const paidLoanIds = await getPaidLoanIdsOnDate(loanIds, dateStr);

@@ -393,17 +393,13 @@ function isMonthlyScheduleDue(
     return day === Math.min(dayOfMonth, lastDayOfMonth(year, month));
 }
 
-export async function getInterestSchedulesForToday(): Promise<InterestScheduleRow[]> {
-    const today = todayInKL();
+/** Active schedules due on `dateStr` (YYYY-MM-DD, KL calendar day): every daily one, plus monthly ones on their day. */
+export async function getInterestSchedulesDueOn(dateStr: string): Promise<InterestScheduleRow[]> {
+    const [year, month, day] = dateStr.split('-').map(Number);
     const rows = await getActiveInterestSchedules();
     return rows.filter((row) => {
         if (row.frequency === 'daily') return true;
-        return isMonthlyScheduleDue(
-            row.dayOfMonth,
-            today.getFullYear(),
-            today.getMonth() + 1,
-            today.getDate()
-        );
+        return isMonthlyScheduleDue(row.dayOfMonth, year, month, day);
     });
 }
 
@@ -441,10 +437,11 @@ export async function computeInterestAmount(
     return amount > 0 ? amount : null;
 }
 
+/** `created` is false when that day's interest was already accrued (the existing income is returned). */
 export async function accrueInterestForSchedule(
     schedule: InterestScheduleRow,
     date?: string
-): Promise<{ incomeId: number; amount: number } | null> {
+): Promise<{ incomeId: number; amount: number; created: boolean } | null> {
     const accrualDate = formatDateForDb(date);
     const db = requireDb();
 
@@ -464,6 +461,7 @@ export async function accrueInterestForSchedule(
         return {
             incomeId: existing[0].id,
             amount: parseNum(existing[0].amount),
+            created: false,
         };
     }
 
@@ -481,7 +479,7 @@ export async function accrueInterestForSchedule(
         schedule.paymentMethod
     );
 
-    return { incomeId, amount };
+    return { incomeId, amount, created: true };
 }
 
 // ponytail self-check: pure helpers only, no DB

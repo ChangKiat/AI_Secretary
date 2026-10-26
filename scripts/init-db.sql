@@ -290,3 +290,18 @@ CREATE INDEX IF NOT EXISTS car_service_items_visit_id_idx
     ON car_service_items(visit_id);
 CREATE INDEX IF NOT EXISTS car_service_visits_date_idx
     ON car_service_visits(date);
+
+-- Daily job ledger (Dashboard scheduler, server/dailyJobs.ts)
+CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+    job TEXT NOT NULL,
+    run_date TEXT NOT NULL,
+    status TEXT NOT NULL,
+    triggered_by TEXT,
+    attempts INTEGER NOT NULL DEFAULT 1,
+    summary TEXT,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    PRIMARY KEY (job, run_date)
+);
+
+ALTER TABLE scheduled_job_runs ENABLE ROW LEVEL SECURITY;
