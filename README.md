@@ -11,6 +11,7 @@ A proactive personal assistant built with Node.js and TypeScript. Uses Google Ge
 - **Calendar**: Create events and check schedule (Google Calendar)
 - **Gym**: Log workouts, view history, get suggestions
 - **Nutrition**: Log meals from photos with protein estimates, daily summaries, meal suggestions
+- **Weight and steps buttons**: Send `/start` once to show ⚖️ Weight and 👣 Steps under the message box. Tap one, then send the number (`85.5`, `9800`, `9.8k`, add `yesterday` for yesterday's); it's saved straight to the database without Gemini (`src/quickLog.ts`)
 - **Automated billing**: Cron logs fixed expenses at 9:00 AM (Asia/Kuala_Lumpur)
 
 ## Prerequisites

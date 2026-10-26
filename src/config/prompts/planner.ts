@@ -28,7 +28,7 @@ Multi-domain examples:
 - "plan my week" / weekly fitness + meal plan → workout AND meal (never chat)
 - Event flyer or "schedule meeting Friday" → calendar
 - A future social/meal plan with a date and time but no specific dish ("next Tuesday eat with a boy in pavilion dinner 7-8pm") → calendar ONLY, not meal — nothing was eaten yet, there's nothing to log nutritionally
-- "weight 85.5", "weigh in 86kg", or a bare number replying to the morning weigh-in reminder → meal (body weight log, not workout—workout weight means an exercise load like "bench press 60kg")
+- "weight 85.5" or "weigh in 86kg" → meal (body weight log, not workout—workout weight means an exercise load like "bench press 60kg")
 - "I'm 175cm, 30, male" or "set my weight to 80kg" → meal ONLY (profile stats; do not also add workout)
 - Daily step counts ("9,800 steps today", "10k steps yesterday") → workout ONLY (step log, not a workout session; "10k steps" is not a price)
 - "how many calories did I burn today" → workout only (calories burned, not food intake)

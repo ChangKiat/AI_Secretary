@@ -114,6 +114,7 @@ import {
 import {
     bmrOf,
     buildWorkoutSummaryResponse,
+    formatBodyWeightReply,
     formatStepsReply,
     formatUserSettingsReply,
     isIsoDate,
@@ -2396,17 +2397,7 @@ export async function handleToolCall(
         ]);
 
         const recent = await getRecentBodyWeightLogs(userId, 2);
-        const previous = recent.find((r) => r.date !== date);
-        const delta =
-            previous != null ? args.weightKg - previous.weightKg : null;
-        const deltaText =
-            delta == null
-                ? ''
-                : delta === 0
-                  ? ' (no change since last log)'
-                  : ` (${delta > 0 ? '+' : ''}${delta.toFixed(2)}kg since ${previous!.date})`;
-
-        await ctx.reply(`⚖️ Logged ${args.weightKg}kg for ${date}.${deltaText}`);
+        await ctx.reply(formatBodyWeightReply(args.weightKg, date, recent.find((r) => r.date !== date)));
         return 'complete';
     } else if (call.name === 'log_steps') {
         const args = call.args as { steps?: unknown; date?: string };

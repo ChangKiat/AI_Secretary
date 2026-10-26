@@ -23,4 +23,4 @@ RULES:
   - Only ask again when the answer is truly unreadable, and always end that question with "?".
   - Never log the full bill as meals. Never ask for macros.
 - Do NOT call get_workout_summary or get_nutrition_summary when logging from a photo—only log_meal.
-- BODY WEIGHT: "weight 85.5", "weigh in: 86", "log my weight as X", or a bare number replying to the morning weigh-in reminder → call log_body_weight immediately with that value. This is a body weight measurement, NOT a gym exercise load—never route it to log_workout.`;
+- BODY WEIGHT: "weight 85.5", "weigh in: 86", "log my weight as X" → call log_body_weight immediately with that value. This is a body weight measurement, NOT a gym exercise load—never route it to log_workout.`;

@@ -5,8 +5,9 @@ import {
 } from '../services/nutritionService';
 import { buildDailyBurnSeries, type DailyBurnSeries } from '../services/dailyActivityService';
 
-// Pure helpers behind the health tools in toolHandler.ts (update_user_settings, log_steps,
-// get_workout_summary). Kept here so they stay testable without a DB or a Gemini chat.
+// Pure helpers behind the health tools in toolHandler.ts (update_user_settings, log_body_weight,
+// log_steps, get_workout_summary) and the Weight/Steps buttons (quickLog.ts). Kept here so they
+// stay testable without a DB or a Gemini chat.
 
 export type BmrProfile = Pick<NutritionTargets, 'bodyWeightKg' | 'heightCm' | 'age' | 'sex'>;
 
@@ -240,6 +241,22 @@ export function formatStepsReply(input: {
     return lines.join('\n');
 }
 
+/** `previous`: the latest weigh-in on another day, for the change since then. */
+export function formatBodyWeightReply(
+    weightKg: number,
+    date: string,
+    previous: { date: string; weightKg: number } | undefined
+): string {
+    const delta = previous != null ? weightKg - previous.weightKg : null;
+    const deltaText =
+        delta == null
+            ? ''
+            : delta === 0
+              ? ' (no change since last log)'
+              : ` (${delta > 0 ? '+' : ''}${delta.toFixed(2)}kg since ${previous!.date})`;
+    return `⚖️ Logged ${weightKg}kg for ${date}.${deltaText}`;
+}
+
 /**
  * get_workout_summary response: the workout-only figures from getWorkoutBurnSummary, renamed
  * so they can't be mistaken for the total, merged with the Dashboard "calories burned" series
@@ -375,6 +392,13 @@ if (require.main === module) {
     }
     if (!formatStepsReply({ steps: 100, date: '2026-10-04', stepKcal: 4, bodyWeightKg: null, previousSteps: null }).includes('assume 70kg')) {
         fail('steps reply without weight should mention the 70kg assumption', null);
+    }
+    for (const [reply, expected] of [
+        [formatBodyWeightReply(85.5, '2026-10-26', { date: '2026-10-25', weightKg: 86 }), '⚖️ Logged 85.5kg for 2026-10-26. (-0.50kg since 2026-10-25)'],
+        [formatBodyWeightReply(86, '2026-10-26', { date: '2026-10-25', weightKg: 86 }), '⚖️ Logged 86kg for 2026-10-26. (no change since last log)'],
+        [formatBodyWeightReply(86, '2026-10-26', undefined), '⚖️ Logged 86kg for 2026-10-26.'],
+    ] as const) {
+        if (reply !== expected) fail('body weight reply', reply);
     }
 
     const summary = { startDate: '2026-06-01', endDate: '2026-06-03', sessionCount: 1, totalCaloriesBurned: 100, totalFatBurnG: 5.2 };

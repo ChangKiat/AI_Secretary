@@ -68,6 +68,8 @@ import {
     UserChatState,
     SpecialistDomain,
 } from './routing/router';
+import { handleQuickLogText, quickLogKeyboard } from './quickLog';
+import { klIsoDate } from './utils/klDate';
 import cron from 'node-cron';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
@@ -272,6 +274,13 @@ async function logFixedBill(exp: DueFixedExpense): Promise<string | null> {
     return lineWithWarnings(`${via}${toFund}${loanNote}`);
 }
 
+bot.start(async (ctx) => {
+    await ctx.reply(
+        'Tap ⚖️ Weight or 👣 Steps below to log them without the AI. For anything else, just type.',
+        quickLogKeyboard
+    );
+});
+
 bot.command('setprotein', async (ctx) => {
     const text = ctx.message.text.replace('/setprotein', '').trim();
     const target = parseFloat(text);
@@ -401,21 +410,6 @@ async function main() {
         { timezone: 'Asia/Kuala_Lumpur' }
     );
 
-    cron.schedule(
-        '0 8 * * *',
-        async () => {
-            try {
-                await bot.telegram.sendMessage(
-                    MY_CHAT_ID,
-                    '⚖️ Morning weigh-in — step on the scale and reply like "weight 85.5" to log it.'
-                );
-            } catch (error) {
-                console.error('Weigh-in Reminder Cron Job Error:', error);
-            }
-        },
-        { timezone: 'Asia/Kuala_Lumpur' }
-    );
-
     bot.launch(() => {
         console.log('🤖 Secretary Bot is running...');
         console.log(`   Default model: ${GEMINI_MODEL_DEFAULT}`);
@@ -432,13 +426,6 @@ const REPLY_TARGET_DOMAIN: Record<
     import('./services/incomeService').ReplyRecordType,
     SpecialistDomain
 > = { expense: 'expense', income: 'expense', meal: 'meal', workout: 'workout' };
-
-/** YYYY-MM-DD in Malaysia time, `offsetDays` from today. */
-function klIsoDate(offsetDays = 0): string {
-    return new Date(Date.now() + offsetDays * 86_400_000).toLocaleDateString('en-CA', {
-        timeZone: 'Asia/Kuala_Lumpur',
-    });
-}
 
 function buildContextPrompt(userMessage: string): string {
     const now = new Date();
@@ -903,6 +890,7 @@ bot.on(message('text'), async (ctx) => {
     await ctx.sendChatAction('typing');
 
     try {
+        if (await handleQuickLogText(ctx, userMessage)) return;
         await routeAndExecute(ctx, userId, userMessage);
     } catch (error: unknown) {
         console.error('Error:', error);
