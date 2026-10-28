@@ -1,5 +1,5 @@
 import type { Context } from 'telegraf';
-import type { ChatSession } from '@google/generative-ai';
+import type { ChatSession } from '../config/ai';
 import { resolveCategory } from '../config/expenseCategories';
 import {
     getExpensePaymentAccountNames,

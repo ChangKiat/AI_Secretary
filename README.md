@@ -1,11 +1,11 @@
 # AI Secretary Telegram Bot
 
-A proactive personal assistant built with Node.js and TypeScript. Uses Google Gemini function calling to manage finances, Google Calendar, gym workouts, and nutrition tracking—all stored in Supabase PostgreSQL.
+A proactive personal assistant built with Node.js and TypeScript. Uses Claude or Google Gemini function calling to manage finances, Google Calendar, gym workouts, and nutrition tracking—all stored in Supabase PostgreSQL.
 
 ## Features
 
 - **Conversational UI** via Telegram (text, voice, photos, PDFs)
-- **Cost-optimized AI**: `gemini-3.5-flash-lite` by default, `gemini-3.5-flash` for heavy PDF extraction
+- **Two AI providers**: `AI_PROVIDER=claude` runs Claude Haiku 5.5; `AI_PROVIDER=gemini` (the default) runs `gemini-3.5-flash-lite`, with `gemini-3.5-flash` for heavy PDF extraction. See [Switching between Claude and Gemini](#switching-between-claude-and-gemini)
 - **Finances**: Log expenses, recurring bills, spending summaries (Supabase)
 - **Trips**: Expenses dated inside a trip (created in the Dashboard) land on its trip board. Trip-currency amounts (`32k`, `1.2m`) are converted to MYR at the trip's latest exchange rate: cash is logged as spending from exchanged trip cash, a card or e-wallet as a card charge. RM items the model marks as trip spending are grouped into the trip. A dated list (`26/09/2026` lines followed by items) is logged in one go, with a per-day breakdown and possible-duplicate warnings.
 - **Calendar**: Create events and check schedule (Google Calendar)
@@ -18,7 +18,7 @@ A proactive personal assistant built with Node.js and TypeScript. Uses Google Ge
 
 - Node.js v18+
 - Telegram Bot Token ([@BotFather](https://t.me/botfather))
-- Google Gemini API Key
+- Anthropic API key (for `AI_PROVIDER=claude`) and/or Google Gemini API key (for `AI_PROVIDER=gemini`, and for voice notes either way)
 - Supabase project (Postgres + optional Storage bucket)
 - Google Cloud service account with **Calendar API** enabled
 
@@ -142,7 +142,7 @@ Send photos with captions to route intent:
 
 ```
 src/
-  config/       # System prompt, Gemini model factory
+  config/       # System prompt; ai.ts picks the provider, claude.ts / gemini.ts build the models
   db/           # Drizzle schema + Postgres client
   services/     # expense, gym, nutrition, calendar
   tools/        # Gemini function declarations + handlers
@@ -161,9 +161,19 @@ Deploy to Render/Koyeb with:
 - Start: `npm start`
 - Env vars: all values from `env.example` (use `GOOGLE_CREDENTIALS_JSON` instead of a file)
 
+## Switching between Claude and Gemini
+
+Set `AI_PROVIDER` in `.env` and restart the bot. The startup log prints the provider and both model names.
+
+- **`AI_PROVIDER=claude`**: needs `ANTHROPIC_API_KEY` (create it in the Claude Console under API keys; usage is billed to that organization's API credits, separately from a Claude.ai subscription). Both models default to `claude-haiku-5-5`. The heavy model is the same Haiku at more thinking effort (`CLAUDE_EFFORT_HEAVY`, default `medium`, vs `CLAUDE_EFFORT_DEFAULT`, default `low`); it reads PDF statements and takes over when a call times out or Claude is overloaded. Override with `CLAUDE_MODEL_DEFAULT` / `CLAUDE_MODEL_HEAVY`.
+- **`AI_PROVIDER=gemini`** (or unset): the original Gemini setup, unchanged.
+- **Voice notes with Claude**: Claude can't take audio, so the bot asks Gemini (`GEMINI_MODEL_DEFAULT`) for a transcript and sends that text to Claude. Without `GEMINI_API_KEY` the bot asks you to type instead.
+- The tools stay declared once, in Gemini's format (`src/tools/tools.ts`); `src/config/claude.ts` converts them to JSON Schema and gives Claude a chat session that behaves like Gemini's, so the tool handlers work with either provider.
+- Claude requests cache the system prompt and tool list, so the second call of a turn (after a tool runs) reads them at a tenth of the input price.
+
 ## Model cost tips
 
-- Default model is Flash-Lite (~6x cheaper output than full Flash)
+- Gemini's default model is Flash-Lite (~6x cheaper output than full Flash)
 - PDF bank statements use the heavy model automatically
 - Adjust via `GEMINI_MODEL_DEFAULT` and `GEMINI_MODEL_HEAVY`
 - **Image tokens**: photos are downscaled to `GEMINI_IMAGE_MAX_PX` (default 768) before Gemini — typically **258 tokens/image** vs thousands for full phone photos. Meal photos stored in Supabase stay full resolution. Raise `GEMINI_IMAGE_MAX_PX` (e.g. 1024) if receipt OCR misses small text.
