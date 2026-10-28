@@ -1,10 +1,12 @@
-import { GoogleGenerativeAI, ChatSession, FunctionCall } from '@google/generative-ai';
 import {
     createDomainModel,
     createPlannerModel,
-    startChatWithRetry,
-    isRetryableGeminiError,
-} from '../config/gemini';
+    isRetryableAiError,
+    ChatModel,
+    ChatSession,
+    FunctionCall,
+    MessageRequest,
+} from '../config/ai';
 import { getPaymentSignalTerms, type PaymentSignalTerms } from '../config/paymentMethods';
 import { RouteDomain, SpecialistDomain } from '../config/prompts';
 
@@ -24,10 +26,9 @@ export interface UserChatState {
 export interface RouteOptions {
     userId: number;
     session?: UserChatState;
-    genAI: GoogleGenerativeAI;
-    plannerModel: import('@google/generative-ai').GenerativeModel;
-    defaultModel: import('@google/generative-ai').GenerativeModel;
-    heavyModel: import('@google/generative-ai').GenerativeModel;
+    plannerModel: ChatModel;
+    defaultModel: ChatModel;
+    heavyModel: ChatModel;
 }
 
 function parseDomains(raw: unknown): RouteDomain[] {
@@ -242,7 +243,7 @@ export async function routeMessage(
     prompt: string | (string | Record<string, unknown>)[],
     options: RouteOptions
 ): Promise<RouteDomain[]> {
-    const { session, plannerModel, genAI } = options;
+    const { session, plannerModel } = options;
 
     if (session?.awaitingInput && session.activeDomain) {
         return [session.activeDomain];
@@ -250,13 +251,13 @@ export async function routeMessage(
 
     let result;
     try {
-        const chat = startChatWithRetry(plannerModel);
-        result = await chat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
+        const chat = plannerModel.startChat();
+        result = await chat.sendMessage(prompt as MessageRequest);
     } catch (error) {
-        if (!isRetryableGeminiError(error)) throw error;
+        if (!isRetryableAiError(error)) throw error;
         console.log('🧭 Planner (lite) overloaded — retrying with heavy model');
-        const heavyChat = startChatWithRetry(createPlannerModel(genAI, { heavy: true }), 0);
-        result = await heavyChat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
+        const heavyChat = createPlannerModel({ heavy: true }).startChat();
+        result = await heavyChat.sendMessage(prompt as MessageRequest);
     }
     const domains = plannerRouteDomains(result.response.functionCalls());
     if (domains) {
@@ -293,10 +294,10 @@ export function getOrCreateDomainChat(
     const existing = state.chats[domain];
     if (existing) return existing;
 
-    const model = createDomainModel(options.genAI, domain, {
+    const model = createDomainModel(domain, {
         heavy: options.heavy,
     });
-    const chat = startChatWithRetry(model);
+    const chat = model.startChat();
     state.chats[domain] = chat;
     return chat;
 }

@@ -1,7 +1,6 @@
 import { Telegraf } from 'telegraf';
 import { randomUUID } from 'crypto';
 import { message } from 'telegraf/filters';
-import { GoogleGenerativeAI, GenerativeModel, ChatSession, Part } from '@google/generative-ai';
 import 'dotenv/config';
 import { formatBulkExpenseLogReply } from './services/expenseService';
 import { buildTripContextHint, TripLookup } from './services/tripExpenseService';
@@ -18,12 +17,19 @@ import { formatBulkWorkoutLogReply, getWorkoutSessionRows } from './services/gym
 import {
     createPlannerModel,
     createDomainModel,
-    startChatWithRetry,
-    isRetryableGeminiError,
-    GEMINI_MODEL_DEFAULT,
-    GEMINI_MODEL_HEAVY,
+    isRetryableAiError,
+    isRateLimitAiError,
+    transcribeVoice,
+    AI_PROVIDER,
+    MODEL_DEFAULT,
+    MODEL_HEAVY,
     SKIP_PLANNER,
-} from './config/gemini';
+    VOICE_NEEDS_TRANSCRIPT,
+    ChatModel,
+    ChatSession,
+    MessageRequest,
+    Part,
+} from './config/ai';
 import { documentExpensePrompt } from './config/prompts';
 import { loadExpenseCategories } from './config/expenseCategories';
 import { loadPaymentAccounts } from './config/paymentMethods';
@@ -54,7 +60,6 @@ import { handleQuickLogText, quickLogKeyboard } from './quickLog';
 import { klIsoDate } from './utils/klDate';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 const MY_CHAT_ID = process.env.MY_TELEGRAM_CHAT_ID!;
 const AUTHORIZED_USER_ID = Number(MY_CHAT_ID);
 const GEMINI_IMAGE_MAX_PX = parseMaxPx(process.env.GEMINI_IMAGE_MAX_PX, 768);
@@ -65,12 +70,11 @@ const SESSION_TTL_MS = 10 * 60 * 1000;
 
 const userSessions = new Map<number, UserChatState>();
 
-let plannerModel: GenerativeModel;
-let defaultModel: GenerativeModel;
-let heavyModel: GenerativeModel;
+let plannerModel: ChatModel;
+let defaultModel: ChatModel;
+let heavyModel: ChatModel;
 
 const routeOptionsBase = () => ({
-    genAI,
     plannerModel,
     defaultModel,
     heavyModel,
@@ -78,15 +82,15 @@ const routeOptionsBase = () => ({
 
 /** Tool descriptions and domain prompts embed the account/category names current at build time. */
 function buildModels() {
-    plannerModel = createPlannerModel(genAI);
-    defaultModel = createDomainModel(genAI, 'expense');
-    heavyModel = createDomainModel(genAI, 'expense', { heavy: true });
+    plannerModel = createPlannerModel();
+    defaultModel = createDomainModel('expense');
+    heavyModel = createDomainModel('expense', { heavy: true });
 }
 
 // A Dashboard edit renamed/added/removed an account or category: rebuild the models and let every
-// session rebuild its domain chats, so Gemini sees the new names on the next turn.
+// session rebuild its domain chats, so the model sees the new names on the next turn.
 onFinanceNamesChanged(() => {
-    console.log('🔄 Payment accounts or expense categories changed — rebuilding Gemini models');
+    console.log('🔄 Payment accounts or expense categories changed — rebuilding AI models');
     buildModels();
     invalidateDomainChats();
 });
@@ -160,14 +164,18 @@ async function main() {
     await loadExpenseCategories();
     await loadPaymentAccounts();
     buildModels();
+    if (AI_PROVIDER === 'claude' && !process.env.ANTHROPIC_API_KEY) {
+        console.warn('⚠️ AI_PROVIDER=claude but ANTHROPIC_API_KEY is not set: every Claude call will fail.');
+    }
 
     // The daily jobs (9am fixed bills and interest, 9:30pm check-in) run on the Dashboard server,
     // Dashboard/server/dailyJobs.ts, which sends their reports through this bot.
 
     bot.launch(() => {
         console.log('🤖 Secretary Bot is running...');
-        console.log(`   Default model: ${GEMINI_MODEL_DEFAULT}`);
-        console.log(`   Heavy model:   ${GEMINI_MODEL_HEAVY}`);
+        console.log(`   AI provider:   ${AI_PROVIDER}`);
+        console.log(`   Default model: ${MODEL_DEFAULT}`);
+        console.log(`   Heavy model:   ${MODEL_HEAVY}`);
     });
 }
 
@@ -278,7 +286,7 @@ async function runChatTurn(
     toolOptions?: import('./tools/toolHandler').ToolCallOptions,
     allowedTools?: Set<string>
 ): Promise<'complete' | 'awaiting_input'> {
-    const result = await chat.sendMessage(prompt as Parameters<ChatSession['sendMessage']>[0]);
+    const result = await chat.sendMessage(prompt as MessageRequest);
     const response = result.response;
     const rawCalls = response.functionCalls();
     console.log(
@@ -287,7 +295,7 @@ async function runChatTurn(
     );
 
     if (rawCalls && rawCalls.length > 0) {
-        // Gemini expects ONE follow-up turn carrying a functionResponse for every call.
+        // Gemini and Claude expect ONE follow-up turn carrying a functionResponse for every call.
         // Handlers each send their own, which breaks the 2nd+ call of a multi-call turn
         // (400 → "Sorry, I encountered an error") and makes even a single log_* call
         // wait a full model round trip before the user sees the confirmation. Buffer
@@ -295,17 +303,18 @@ async function runChatTurn(
         // handler needs the model's follow-up text to answer the user.
         // ponytail: a turn that includes a reply-reading tool still sends per call;
         // upgrade path = handlers return their response instead of sending it.
-        const pendingResponses: Part[] = [];
+        const pendingResponses: (string | Part)[] = [];
         const deferResponses = !rawCalls.some((c) =>
             TOOLS_READING_MODEL_REPLY.has(resolveToolName(c.name))
         );
-        const turnChat: ChatSession = Object.assign(Object.create(chat), {
-            sendMessage: async (parts: Part[]) => {
-                pendingResponses.push(...parts);
-                if (deferResponses) return { response: { text: (): string => '' } };
+        const turnChat: ChatSession = {
+            sendMessage: async (request: MessageRequest) => {
+                // A follow-up instruction is a plain string; spreading it would push one part per character.
+                pendingResponses.push(...(typeof request === 'string' ? [request] : request));
+                if (deferResponses) return { response: { text: () => '', functionCalls: () => undefined } };
                 return chat.sendMessage(pendingResponses.splice(0));
             },
-        });
+        };
 
         // A specialist sees the whole message, so it sometimes calls tools it wasn't
         // given (workout specialist → log_expense on "tng rm7", expense → log_supplement).
@@ -431,7 +440,7 @@ async function runDomainTurn(
 /**
  * No specialist was picked (the SKIP_PLANNER heuristics, or the planner said chat). The planner
  * model answers with route_request: when that names specialists, they are returned for the caller
- * to run (the heuristics missed the message; no extra Gemini call). Otherwise this replies itself
+ * to run (the heuristics missed the message; no extra model call). Otherwise this replies itself
  * and returns [].
  */
 async function handleChatOnly(
@@ -440,11 +449,11 @@ async function handleChatOnly(
 ): Promise<SpecialistDomain[]> {
     let result;
     try {
-        const chat = startChatWithRetry(plannerModel);
+        const chat = plannerModel.startChat();
         result = await chat.sendMessage(contextPrompt);
     } catch (error) {
-        if (!isRetryableGeminiError(error)) throw error;
-        const heavyChat = startChatWithRetry(createPlannerModel(genAI, { heavy: true }), 0);
+        if (!isRetryableAiError(error)) throw error;
+        const heavyChat = createPlannerModel({ heavy: true }).startChat();
         result = await heavyChat.sendMessage(contextPrompt);
     }
     const routed = filterSpecialistDomains(plannerRouteDomains(result.response.functionCalls()) ?? []);
@@ -594,7 +603,7 @@ async function routeAndExecute(
                 heavy
             );
         } catch (error) {
-            if (!isRetryableGeminiError(error)) throw error;
+            if (!isRetryableAiError(error)) throw error;
             console.log(
                 `🧭 ${domain} (${heavy ? 'heavy' : 'lite'}) overloaded — retrying with ${heavy ? 'lite' : 'heavy'} model`
             );
@@ -648,12 +657,11 @@ bot.on(message('text'), async (ctx) => {
         await routeAndExecute(ctx, userId, userMessage);
     } catch (error: unknown) {
         console.error('Error:', error);
-        const msg = error instanceof Error ? error.message : String(error);
-        if (isRetryableGeminiError(error)) {
+        if (isRetryableAiError(error)) {
             await ctx.reply(
-                '⏳ Gemini is overloaded right now (tried both models and it\'s still down). Please try again in a bit.'
+                '⏳ The AI service is overloaded right now (tried both models and it\'s still down). Please try again in a bit.'
             );
-        } else if (msg.includes('429 Too Many Requests')) {
+        } else if (isRateLimitAiError(error)) {
             await ctx.reply(
                 "⏳ Whoa, slow down! I'm hitting my API rate limit. Give me a moment to cool off."
             );
@@ -668,7 +676,7 @@ bot.on(message('photo'), async (ctx) => {
     try {
         const photo = ctx.message.photo[ctx.message.photo.length - 1];
         const photoBuffer = await fetchTelegramFile(photo.file_id);
-        const imagePart = await buildGeminiFilePart(photoBuffer, 'image/jpeg');
+        const imagePart = await buildFilePart(photoBuffer, 'image/jpeg');
         const caption = ctx.message.caption || '';
 
         await routeAndExecute(ctx, ctx.from.id, caption, [imagePart], {
@@ -679,7 +687,7 @@ bot.on(message('photo'), async (ctx) => {
         });
     } catch (error) {
         console.error('Error processing image:', error);
-        if (isRetryableGeminiError(error)) {
+        if (isRetryableAiError(error)) {
             await ctx.reply(
                 '⏳ The AI service is busy right now. Please try sending the image again in a moment.'
             );
@@ -694,7 +702,21 @@ bot.on(message('voice'), async (ctx) => {
     try {
         const voice = ctx.message.voice;
         const audioBuffer = await fetchTelegramFile(voice.file_id);
-        const audioPart = await buildGeminiFilePart(audioBuffer, 'audio/ogg');
+        const audioPart = await buildFilePart(audioBuffer, 'audio/ogg');
+        if (VOICE_NEEDS_TRANSCRIPT) {
+            if (!process.env.GEMINI_API_KEY) {
+                await ctx.reply('Voice notes need GEMINI_API_KEY (used to transcribe them for Claude). Please type it instead.');
+                return;
+            }
+            const transcript = await transcribeVoice(audioPart);
+            if (!transcript) {
+                await ctx.reply("Sorry, I couldn't hear that clearly.");
+                return;
+            }
+            console.log('🎙️ Voice transcript:', transcript);
+            await routeAndExecute(ctx, ctx.from.id, transcript, [], { isVoiceInput: true });
+            return;
+        }
         const voiceHint =
             '\nListen to this audio command and execute the appropriate tool. ' +
             "Use today's date from SYSTEM CONTEXT when logging meals or expenses unless the user specifies another date.";
@@ -704,9 +726,9 @@ bot.on(message('voice'), async (ctx) => {
         });
     } catch (error) {
         console.error('Error processing voice:', error);
-        if (isRetryableGeminiError(error)) {
+        if (isRetryableAiError(error)) {
             await ctx.reply(
-                '⏳ Gemini is overloaded right now. Please try sending the voice message again in a bit.'
+                '⏳ The AI service is overloaded right now. Please try sending the voice message again in a bit.'
             );
         } else {
             await ctx.reply("Sorry, I couldn't hear that clearly.");
@@ -726,7 +748,7 @@ bot.on(message('document'), async (ctx) => {
         }
 
         const fileBuffer = await fetchTelegramFile(document.file_id);
-        const filePart = await buildGeminiFilePart(fileBuffer, mimeType);
+        const filePart = await buildFilePart(fileBuffer, mimeType);
         const userCaption = ctx.message.caption || '';
         const userId = ctx.from.id;
 
@@ -737,7 +759,7 @@ bot.on(message('document'), async (ctx) => {
                 replyCtx.promptHint +
                 '\n' +
                 documentExpensePrompt;
-            const chat = startChatWithRetry(createDomainModel(genAI, 'expense', { heavy: true }));
+            const chat = createDomainModel('expense', { heavy: true }).startChat();
             try {
                 await runChatTurn(
                     chat,
@@ -750,8 +772,8 @@ bot.on(message('document'), async (ctx) => {
                     }
                 );
             } catch (error) {
-                if (isRetryableGeminiError(error)) {
-                    const fallbackChat = startChatWithRetry(createDomainModel(genAI, 'expense'));
+                if (isRetryableAiError(error)) {
+                    const fallbackChat = createDomainModel('expense').startChat();
                     await runChatTurn(
                         fallbackChat,
                         ctx,
@@ -777,9 +799,9 @@ bot.on(message('document'), async (ctx) => {
         });
     } catch (error) {
         console.error('Error processing document:', error);
-        if (isRetryableGeminiError(error)) {
+        if (isRetryableAiError(error)) {
             await ctx.reply(
-                '⏳ Gemini is overloaded right now (tried both models and it\'s still down). Please try again in a bit.'
+                '⏳ The AI service is overloaded right now (tried both models and it\'s still down). Please try again in a bit.'
             );
         } else {
             await ctx.reply('Sorry, I had trouble reading that file.');
@@ -793,7 +815,7 @@ async function fetchTelegramFile(fileId: string): Promise<Buffer> {
     return Buffer.from(await response.arrayBuffer());
 }
 
-async function buildGeminiFilePart(buffer: Buffer, mimeType: string) {
+async function buildFilePart(buffer: Buffer, mimeType: string) {
     const { data, mimeType: outMime } = await resizeForGemini(
         buffer,
         mimeType,

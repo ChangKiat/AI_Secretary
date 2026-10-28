@@ -8,11 +8,6 @@ export const GEMINI_MODEL_DEFAULT =
 export const GEMINI_MODEL_HEAVY =
     process.env.GEMINI_MODEL_HEAVY || 'gemini-3.5-flash';
 
-/** Skip Gemini planner; route with keyword heuristics instead. */
-export const SKIP_PLANNER = /^(1|true|yes)$/i.test(
-    (process.env.SKIP_PLANNER || '').trim()
-);
-
 const generationConfig = {
     maxOutputTokens: 2048,
     temperature: 0.1,

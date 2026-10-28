@@ -1,6 +1,6 @@
 import { Context } from 'telegraf';
 import { randomUUID } from 'crypto';
-import { ChatSession, FunctionCall } from '@google/generative-ai';
+import type { ChatSession, FunctionCall } from '../config/ai';
 import { resolveCategory, upsertBudget, getBudgets } from '../config/expenseCategories';
 import {
     displayPaymentMethod,
