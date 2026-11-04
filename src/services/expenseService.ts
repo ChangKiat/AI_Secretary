@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { expenses, fixedExpenses, investmentEvents } from '../db/schema';
 import { getExpenseCategories, resolveCategory } from '../config/expenseCategories';
@@ -142,6 +142,61 @@ export type ExpenseTripFields = {
 
 export function isTripFundSpend(row: { tripLeg?: string | null }): boolean {
     return row.tripLeg === 'fund';
+}
+
+/**
+ * Spending totals skip trip cash rows because the exchange already counted that money, so a repayment
+ * linked to one has nothing to come off. This adds it to the trip's exchanges, newest first and never
+ * past an exchange's amount. Fund rows keep their own figure for the Trips panel.
+ */
+export function addFundRepaymentsToExchanges(
+    rows: { id: number; date: string; amount: string; tripId?: number | null; tripLeg?: string | null }[],
+    reimbursedByExpenseId: Map<number, number>
+): Map<number, number> {
+    const result = new Map(reimbursedByExpenseId);
+    const unplacedByTrip = new Map<number, number>();
+    for (const row of rows) {
+        if (!isTripFundSpend(row) || row.tripId == null) continue;
+        const repaid = Math.min(parseFloat(row.amount), reimbursedByExpenseId.get(row.id) ?? 0);
+        if (repaid > 0) unplacedByTrip.set(row.tripId, (unplacedByTrip.get(row.tripId) ?? 0) + repaid);
+    }
+    if (unplacedByTrip.size === 0) return result;
+
+    const exchangesNewestFirst = rows
+        .filter((row) => row.tripLeg === 'exchange')
+        .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+    for (const row of exchangesNewestFirst) {
+        if (row.tripId == null) continue;
+        const unplaced = unplacedByTrip.get(row.tripId) ?? 0;
+        const own = result.get(row.id) ?? 0;
+        const moved = Math.min(unplaced, Math.max(0, parseFloat(row.amount) - own));
+        if (moved <= 0) continue;
+        result.set(row.id, own + moved);
+        unplacedByTrip.set(row.tripId, unplaced - moved);
+    }
+    return result;
+}
+
+/**
+ * Reimbursements that count against spending for these rows, for callers holding only part of the
+ * expenses table: an exchange's trip cash rows can fall outside a date range.
+ */
+export async function getSpendingReimbursements(
+    rows: { id: number; tripId?: number | null; tripLeg?: string | null }[]
+): Promise<Map<number, number>> {
+    const reimbursed = await getReimbursementsByExpenseIds(rows.map((row) => row.id));
+    const tripIds = new Set<number>();
+    for (const row of rows) {
+        if (row.tripLeg === 'exchange' && row.tripId != null) tripIds.add(row.tripId);
+    }
+    if (tripIds.size === 0) return reimbursed;
+
+    const tripRows = await requireDb()
+        .select()
+        .from(expenses)
+        .where(and(inArray(expenses.tripId, [...tripIds]), inArray(expenses.tripLeg, ['exchange', 'fund'])));
+    const tripReimbursed = await getReimbursementsByExpenseIds(tripRows.map((row) => row.id));
+    return new Map([...reimbursed, ...addFundRepaymentsToExchanges(tripRows, tripReimbursed)]);
 }
 
 export type AppendExpenseOptions = {
@@ -362,7 +417,10 @@ export async function getSpendingSummary(
     const resolvedFilterCategory = category ? resolveCategory(category) : undefined;
 
     const expenseIds = rows.map((r) => r.id);
-    const reimbursedByExpenseId = await getReimbursementsByExpenseIds(expenseIds);
+    const reimbursedByExpenseId = addFundRepaymentsToExchanges(
+        rows,
+        await getReimbursementsByExpenseIds(expenseIds)
+    );
 
     let totalGross = 0;
     let totalSpent = 0;
@@ -1059,6 +1117,70 @@ if (require.main === module) {
     expectEq(paymentMethodForInsert('  ', true), null, 'keepRaw stores empty as null');
     expectEq(paymentMethodForInsert(null, true), null, 'keepRaw stores null as null');
     setPaymentAccountsCache([]);
+
+    // Repayments on trip cash rows come off the exchange that counted the money.
+    const tripRow = (id: number, tripLeg: string, amount: string, date = '2026-10-01', tripId: number | null = 1) => ({
+        id,
+        date,
+        amount,
+        tripId,
+        tripLeg,
+    });
+    const moved = (rows: ReturnType<typeof tripRow>[], reimbursed: [number, number][]) =>
+        addFundRepaymentsToExchanges(rows, new Map(reimbursed));
+
+    const fundRepaid = new Map<number, number>([[2, 50]]);
+    const oneExchange = addFundRepaymentsToExchanges(
+        [tripRow(1, 'exchange', '400'), tripRow(2, 'fund', '80')],
+        fundRepaid
+    );
+    expectEq(oneExchange.get(1) ?? null, 50, 'fund repayment comes off the exchange');
+    expectEq(oneExchange.get(2) ?? null, 50, 'fund row keeps its own figure for the Trips panel');
+    expectEq(fundRepaid.has(1), false, 'the map passed in is left alone');
+
+    expectEq(
+        moved([tripRow(1, 'exchange', '400'), tripRow(2, 'fund', '80')], [[2, 500]]).get(1) ?? null,
+        80,
+        'a repayment counts only up to the fund row amount'
+    );
+    expectEq(
+        moved([tripRow(1, 'exchange', '400'), tripRow(2, 'fund', '80')], [[1, 30], [2, 50]]).get(1) ?? null,
+        80,
+        'adds to what was repaid on the exchange itself'
+    );
+
+    const twoExchanges = moved(
+        [
+            tripRow(1, 'exchange', '100', '2026-10-01'),
+            tripRow(2, 'exchange', '100', '2026-10-05'),
+            tripRow(3, 'fund', '150', '2026-10-06'),
+        ],
+        [[3, 150]]
+    );
+    expectEq(twoExchanges.get(2) ?? null, 100, 'newest exchange fills first');
+    expectEq(twoExchanges.get(1) ?? null, 50, 'the rest spills to the older exchange');
+
+    expectEq(
+        moved([tripRow(1, 'exchange', '60'), tripRow(2, 'fund', '80')], [[2, 80]]).get(1) ?? null,
+        60,
+        'never past the exchange amount'
+    );
+
+    const otherTrip = moved(
+        [tripRow(1, 'exchange', '400', '2026-10-01', 9), tripRow(2, 'fund', '80', '2026-10-01', 1)],
+        [[2, 50]]
+    );
+    expectEq(otherTrip.has(1), false, 'another trip\'s exchange is untouched');
+    expectEq(
+        moved([tripRow(1, 'card', '400'), tripRow(2, 'fund', '80', '2026-10-01', null)], [[2, 50]]).has(1),
+        false,
+        'a fund row with no trip moves nothing'
+    );
+    expectEq(
+        moved([tripRow(1, 'exchange', '400'), tripRow(2, 'card', '80')], [[2, 50]]).has(1),
+        false,
+        'a card repayment stays on the card row'
+    );
 
     console.log('expenseService self-check ok');
 }
