@@ -12,6 +12,37 @@ export type CalendarEventSummary = {
     end?: string | null;
 };
 
+export type CreatedCalendarEvent = {
+    start: string;
+    /** Name of the calendar it landed on, when Google gives one. */
+    calendarName?: string | null;
+    /** On the service account's own calendar (GOOGLE_CALENDAR_ID missing), which the user can't see. */
+    onBotPrivateCalendar: boolean;
+};
+
+/** Says where the event really went, so a save the user can't see never reads as a success. */
+export function formatCalendarEventReply(title: string, event: CreatedCalendarEvent): string {
+    const when = new Date(event.start).toLocaleString('en-MY', {
+        timeZone: TIMEZONE,
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+    });
+    if (event.onBotPrivateCalendar) {
+        return (
+            `⚠️ Not on your calendar\n\n` +
+            `"${title}" (${when}) was saved to the bot's private calendar, which you can't see.\n\n` +
+            `To fix it, set GOOGLE_CALENDAR_ID to your calendar's ID where the bot runs, restart the bot, and send this event again.`
+        );
+    }
+    const where = event.calendarName ? `your "${event.calendarName}" calendar` : 'your calendar';
+    return `📅 Event Scheduled!\n\nAdded "${title}" to ${where}.\n\n🗓️ ${when}`;
+}
+
 function dayBounds(dateString: string): { timeMin: string; timeMax: string } {
     const startOfDay = new Date(dateString);
     startOfDay.setHours(0, 0, 0, 0);
@@ -29,7 +60,7 @@ export async function createCalendarEvent(
     startDateTime: string,
     endDateTime: string,
     description: string = ''
-) {
+): Promise<CreatedCalendarEvent> {
     try {
         if (!startDateTime || startDateTime === '') {
             throw new Error('Start date is missing. I need a specific date and time.');
@@ -55,7 +86,13 @@ export async function createCalendarEvent(
             requestBody: event,
         });
 
-        return response.data.htmlLink;
+        const organizer = response.data.organizer;
+        return {
+            start: response.data.start?.dateTime || startDateTime,
+            calendarName: organizer?.displayName,
+            onBotPrivateCalendar:
+                organizer?.email?.endsWith('.gserviceaccount.com') ?? CALENDAR_ID === 'primary',
+        };
     } catch (error: any) {
         console.error('--- RAW CALENDAR ERROR ---');
         console.dir(error.response?.data || error, { depth: null });

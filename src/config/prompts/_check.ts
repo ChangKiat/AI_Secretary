@@ -7,6 +7,7 @@ import { basePrompt } from './base';
 import { getDomainDeclarations, getPlannerDeclarations, routeRequestDeclaration } from '../../tools/tools';
 import { getExpenseCategoryNames } from '../expenseCategories';
 import { routeByHeuristics } from '../../routing/router';
+import { formatCalendarEventReply } from '../../services/calendarService';
 
 const DOMAINS: SpecialistDomain[] = ['expense', 'meal', 'calendar', 'workout'];
 
@@ -119,6 +120,27 @@ assert(
         calendarTools.includes('cancel_calendar_event'),
     'calendar must include reschedule_calendar_event and cancel_calendar_event'
 );
+
+// The create reply must say where the event really went, and never promise an invite (events have no attendees).
+const namedCalendarReply = formatCalendarEventReply('Team Night', {
+    start: '2026-12-11T17:00:00+08:00',
+    calendarName: 'Myself',
+    onBotPrivateCalendar: false,
+});
+assert(namedCalendarReply.includes('your "Myself" calendar'), 'calendar reply must name the calendar used');
+// A UTC-based calendar returns "09:00Z", which must still read as 5pm in Malaysia.
+const privateCalendarReply = formatCalendarEventReply('Team Night', {
+    start: '2026-12-11T09:00:00Z',
+    onBotPrivateCalendar: true,
+});
+assert(
+    privateCalendarReply.includes('Not on your calendar') && !privateCalendarReply.includes('Event Scheduled'),
+    "calendar reply must not read as a success on the bot's private calendar"
+);
+for (const reply of [namedCalendarReply, privateCalendarReply]) {
+    assert(/11 Dec 2026/.test(reply) && /5:00\s*pm/i.test(reply), `calendar reply must show Malaysia time: ${reply}`);
+    assert(!/invit/i.test(reply), 'calendar reply must not claim an invite was sent');
+}
 
 // 3.7-3.9: profile stats + BMR, step logging, and the two labelled "calories burned" figures.
 const declarationOf = (domain: SpecialistDomain, name: string) =>

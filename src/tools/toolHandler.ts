@@ -65,6 +65,7 @@ import {
 } from '../services/interestScheduleService';
 import {
     createCalendarEvent,
+    formatCalendarEventReply,
     getSchedule,
     findCalendarEvents,
     rescheduleCalendarEvent,
@@ -1630,7 +1631,7 @@ export async function handleToolCall(
         }
 
         try {
-            await createCalendarEvent(
+            const created = await createCalendarEvent(
                 args.title,
                 args.startDateTime,
                 args.endDateTime || '',
@@ -1639,12 +1640,9 @@ export async function handleToolCall(
             await chat.sendMessage([
                 { functionResponse: { name: 'create_calendar_event', response: { status: 'success' } } },
             ]);
-            await ctx.reply(
-                `📅 **Event Scheduled!**\n\n` +
-                    `I've added "${args.title}" to my records and sent an invitation to your Gmail.\n\n` +
-                    `👉 Please check your calendar on **"${args.startDateTime}"** or look for an invite email to confirm!`,
-                { parse_mode: 'Markdown' }
-            );
+            // Plain text: a "_" or "*" in a title would make Telegram reject Markdown after the event
+            // was saved, and the catch below would then tell the user to retry and create a duplicate.
+            await ctx.reply(formatCalendarEventReply(args.title, created));
             return 'complete';
         } catch (error) {
             console.error('Tool Execution Error:', error);

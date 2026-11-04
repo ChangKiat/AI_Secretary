@@ -167,6 +167,11 @@ async function main() {
     if (AI_PROVIDER === 'claude' && !process.env.ANTHROPIC_API_KEY) {
         console.warn('⚠️ AI_PROVIDER=claude but ANTHROPIC_API_KEY is not set: every Claude call will fail.');
     }
+    if (!process.env.GOOGLE_CALENDAR_ID) {
+        console.warn(
+            "⚠️ GOOGLE_CALENDAR_ID is not set: calendar events go to the service account's private calendar, which you can't see."
+        );
+    }
 
     // The daily jobs (9am fixed bills and interest, 9:30pm check-in) run on the Dashboard server,
     // Dashboard/server/dailyJobs.ts, which sends their reports through this bot.

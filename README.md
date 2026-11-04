@@ -191,8 +191,8 @@ New model generations can also be much slower per-call (extended "thinking" by d
 ### `400 Bad Request: Role 'function' is not supported`
 The installed SDK (`@google/generative-ai`, deprecated by Google) hardcodes `role: "function"` when sending tool/function results back to the model. Newer model generations reject that role. This is patched via `patch-package` (see `patches/@google+generative-ai+*.patch`, changes the role to `"user"`) — the patch reapplies automatically on `npm install` via the `postinstall` script. If you ever run `npm install` and this error comes back, check that `patches/` still exists and `postinstall` ran (look for "patch-package" output during install).
 
-### Calendar events return "success" but never show up
-See the calendar sharing + `GOOGLE_CALENDAR_ID` setup under **Google credentials** above — without it, events are created on the service account's own invisible calendar, not yours.
+### The bot replies "Not on your calendar"
+The event was created on the service account's own invisible calendar, not yours. Do the calendar sharing + `GOOGLE_CALENDAR_ID` setup under **Google credentials** above on whichever host runs the bot, then restart it. The bot also logs a warning at startup when the variable is missing.
 
 ### Rotating a leaked credential
 If a service account key or `GOOGLE_CREDENTIALS_JSON` ever gets exposed (e.g. pasted somewhere it shouldn't be): delete the key (not necessarily the whole service account — deleting the account itself requires recreating it and re-sharing your calendar with the new email, since Cloud Console doesn't offer an easy "undelete" without the account's numeric unique ID from audit logs). Prefer **Service Accounts → [account] → Keys → delete key → add new key** over deleting the account.
