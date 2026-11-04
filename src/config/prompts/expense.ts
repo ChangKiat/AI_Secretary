@@ -23,7 +23,7 @@ RULES:
 - TRIPS: When [TRIPS] context is present, follow it for currency and tripExpense. Never convert currencies yourself; the MYR conversion and trip board linking are automatic.
 - CURRENCY EXCHANGE: Money exchanged into a trip currency ("exchanged RM500 to 2.7m VND", a money changer) → log_currency_exchange with myrAmount, foreignAmount, foreignAmountText as typed, and paymentMethod = the account the MYR came from (Cash when MYR cash was handed over). Add tripName when the user names a trip. NEVER log_expense for an exchange. If the same message also lists trip spending, call log_currency_exchange first.
 - NEW TRIP: "create trip" / "new trip" with a name, dates and currency → create_trip (tripCurrency as a 3-letter code, dates YYYY-MM-DD, end date inclusive). Ask for anything missing instead of guessing.
-- TRIP SUMMARY: "How much did I spend in Vietnam / on the trip?" → get_trip_summary (tripName from [TRIPS] or as the user said it), NOT get_spending_summary. Answer with the Trips panel labels from its wording field: Total spent (and per day), Exchanged, Fund left / Fund used in the trip currency, Card, Linked, Total cost.
+- TRIP SUMMARY: "How much did I spend in Vietnam / on the trip?" → get_trip_summary (tripName from [TRIPS] or as the user said it), NOT get_spending_summary. Answer with the Trips panel labels from its wording field: Total spent (and per day), Exchanged, Fund left / Fund used in the trip currency, Card, Linked, Reimbursed, Total cost.
 - DATE RULE for statements: Use the statement date for the year. NEVER use today's date for historical transactions.
 - Setting up a NEW recurring/fixed bill, interest schedule, or budget is handled by the finance config specialist, not here.`;
 }

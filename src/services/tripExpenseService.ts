@@ -874,6 +874,7 @@ export interface TripSummaryView {
     fundSpentMyr: number;
     cardMyr: number;
     linkedMyr: number;
+    reimbursedMyr: number;
     tripTotalMyr: number;
     byCategory: { category: string; amountMyr: number; count: number }[];
     latestExchangeRate: string | null;
@@ -897,6 +898,7 @@ export function tripSummaryView(summary: TripSummary): TripSummaryView {
         fundSpentMyr: round2(summary.fundSpentMyr),
         cardMyr: round2(summary.cardMyr),
         linkedMyr: round2(summary.linkedMyr),
+        reimbursedMyr: round2(summary.reimbursedMyr),
         tripTotalMyr: round2(summary.tripTotalMyr),
         byCategory: summary.byCategory.map((c) => ({ category: c.category, amountMyr: round2(c.amountMyr), count: c.count })),
         latestExchangeRate:
@@ -910,7 +912,8 @@ export const TRIP_SUMMARY_WORDING =
     'Use the Dashboard Trips panel labels: "Total spent" = spentMyr (perDayMyr per day over days), ' +
     '"Exchanged" = exchangedMyr, "Fund left" = fundRemaining and "Fund used" = fundSpent (both in the trip currency, not MYR), ' +
     '"Card" = cardMyr, "Linked" = linkedMyr (RM transactions grouped into the trip), ' +
-    '"Total cost" = tripTotalMyr (MYR that left your accounts: exchanged + card + linked). ' +
+    '"Reimbursed" = reimbursedMyr (what people paid back, already taken off Total spent and Total cost), ' +
+    '"Total cost" = tripTotalMyr (MYR that left your accounts: exchanged + card + linked, less reimbursed). ' +
     'Total spent counts trip cash at its exchange rate when spent, so Total cost minus Total spent is roughly the unspent cash. ' +
     'Give byCategory amounts in MYR. Leave out lines that are 0.';
 
@@ -928,6 +931,7 @@ export function formatTripSummaryReply(v: TripSummaryView): string {
     }
     if (v.cardMyr > 0) lines.push(`Card: ${formatMyr(v.cardMyr)}`);
     if (v.linkedMyr > 0) lines.push(`Linked: ${formatMyr(v.linkedMyr)}`);
+    if (v.reimbursedMyr > 0) lines.push(`Reimbursed: ${formatMyr(v.reimbursedMyr)}`);
     lines.push(`Total cost: ${formatMyr(v.tripTotalMyr)}`);
     if (v.byCategory.length > 0) {
         lines.push('', 'By category:', ...v.byCategory.map((c) => `• ${c.category}: ${formatMyr(c.amountMyr)} (${c.count})`));
@@ -1173,6 +1177,7 @@ if (require.main === module) {
         fundRemaining: 445_000,
         cardMyr: 0,
         linkedMyr: 294.68,
+        reimbursedMyr: 0,
         spentMyr: 623.48,
         tripTotalMyr: 694.68,
         days: 4,
@@ -1188,6 +1193,11 @@ if (require.main === module) {
     assert(
         fallback.includes('Total spent: RM 623.48') && fallback.includes('Total cost: RM 694.68') && fallback.includes('Fund left: VND 445,000') && !fallback.includes('Card:'),
         `fallback uses the Trips panel labels:\n${fallback}`
+    );
+    assert(
+        !fallback.includes('Reimbursed:') &&
+            formatTripSummaryReply({ ...view, reimbursedMyr: 120.81 }).includes('Reimbursed: RM 120.81'),
+        'fallback shows Reimbursed only when someone paid back'
     );
 
     console.log('tripExpenseService self-check ok');

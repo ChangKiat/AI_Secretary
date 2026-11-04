@@ -4,6 +4,7 @@ import { expenses, trips } from '../db/schema';
 import { resolveCategory } from '../config/expenseCategories';
 import { displayPaymentMethod } from '../config/paymentMethods';
 import type { TripLeg } from './expenseService';
+import { getReimbursementsByExpenseIds } from './incomeService';
 
 export type Trip = {
     id: number;
@@ -23,6 +24,9 @@ export type TripExpense = {
     id: number;
     date: string;
     amount: number;
+    /** Paid back by other people (linked income), capped at the amount. */
+    reimbursed: number;
+    netAmount: number;
     category: string;
     description: string;
     paymentMethod: string | null;
@@ -49,9 +53,11 @@ export type TripSummary = {
     cardMyr: number;
     /** Regular MYR transactions grouped into this trip (tripLeg null). */
     linkedMyr: number;
-    /** What was actually spent: fund spend (MYR equiv) + card + linked. */
+    /** Money people paid back on this trip's entries (linked income). */
+    reimbursedMyr: number;
+    /** What was actually spent: fund spend (MYR equiv) + card + linked, less what was paid back. */
     spentMyr: number;
-    /** Money that left MYR accounts: exchanges + card + linked. */
+    /** Money that left MYR accounts and stayed out: exchanges + card + linked - reimbursed. */
     tripTotalMyr: number;
     days: number | null;
     byCategory: TripCategorySpend[];
@@ -79,11 +85,18 @@ function mapTrip(row: typeof trips.$inferSelect): Trip {
     };
 }
 
-function mapTripExpense(row: typeof expenses.$inferSelect): TripExpense {
+function mapTripExpense(
+    row: typeof expenses.$inferSelect,
+    reimbursedByExpenseId: Map<number, number>
+): TripExpense {
+    const amount = parseFloat(row.amount);
+    const reimbursed = Math.min(amount, reimbursedByExpenseId.get(row.id) ?? 0);
     return {
         id: row.id,
         date: row.date,
-        amount: parseFloat(row.amount),
+        amount,
+        reimbursed,
+        netAmount: amount - reimbursed,
         category: resolveCategory(row.category),
         description: row.description,
         paymentMethod: displayPaymentMethod(row.paymentMethod),
@@ -97,8 +110,8 @@ function mapTripExpense(row: typeof expenses.$inferSelect): TripExpense {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Amount that counts as spending for a trip entry (exchanges are funding, not spend). */
-function spendMyr(row: { tripLeg: string | null; amount: number }): number {
-    return row.tripLeg === 'exchange' ? 0 : row.amount;
+function spendMyr(row: { tripLeg: string | null; netAmount: number }): number {
+    return row.tripLeg === 'exchange' ? 0 : row.netAmount;
 }
 
 export async function listTrips(): Promise<TripWithTotals[]> {
@@ -106,16 +119,18 @@ export async function listTrips(): Promise<TripWithTotals[]> {
     const [rows, tripRows] = await Promise.all([
         db.select().from(trips).orderBy(desc(trips.id)),
         db
-            .select({ tripId: expenses.tripId, tripLeg: expenses.tripLeg, amount: expenses.amount })
+            .select({ id: expenses.id, tripId: expenses.tripId, tripLeg: expenses.tripLeg, amount: expenses.amount })
             .from(expenses)
             .where(isNotNull(expenses.tripId)),
     ]);
+    const reimbursedByExpenseId = await getReimbursementsByExpenseIds(tripRows.map((row) => row.id));
 
     const totals = new Map<number, { spentMyr: number; entryCount: number }>();
     for (const row of tripRows) {
         if (row.tripId == null) continue;
         const t = totals.get(row.tripId) ?? { spentMyr: 0, entryCount: 0 };
-        t.spentMyr += spendMyr({ tripLeg: row.tripLeg, amount: parseFloat(row.amount) });
+        const netAmount = Math.max(0, parseFloat(row.amount) - (reimbursedByExpenseId.get(row.id) ?? 0));
+        t.spentMyr += spendMyr({ tripLeg: row.tripLeg, netAmount });
         t.entryCount += 1;
         totals.set(row.tripId, t);
     }
@@ -222,7 +237,8 @@ export async function listTripExpenses(tripId: number): Promise<TripExpense[]> {
         .from(expenses)
         .where(eq(expenses.tripId, tripId))
         .orderBy(desc(expenses.date), desc(expenses.id));
-    return rows.map(mapTripExpense);
+    const reimbursedByExpenseId = await getReimbursementsByExpenseIds(rows.map((row) => row.id));
+    return rows.map((row) => mapTripExpense(row, reimbursedByExpenseId));
 }
 
 /**
@@ -328,6 +344,8 @@ export async function getTripSummary(tripId: number): Promise<TripSummary | null
     let fundSpentMyr = 0;
     let cardMyr = 0;
     let linkedMyr = 0;
+    let reimbursedMyr = 0;
+    let spentMyr = 0;
     let latestExchangeRate: number | null = null;
     const categoryMap = new Map<string, TripCategorySpend>();
 
@@ -345,8 +363,11 @@ export async function getTripSummary(tripId: number): Promise<TripSummary | null
             linkedMyr += row.amount;
         }
 
+        reimbursedMyr += row.reimbursed;
         const spend = spendMyr(row);
-        if (spend > 0) {
+        spentMyr += spend;
+        // Fully reimbursed entries still count, so the count matches the category's transaction list.
+        if (row.tripLeg !== 'exchange') {
             const entry = categoryMap.get(row.category) ?? {
                 category: row.category,
                 amountMyr: 0,
@@ -360,6 +381,7 @@ export async function getTripSummary(tripId: number): Promise<TripSummary | null
 
     const byCategory = [...categoryMap.values()]
         .map((c) => ({ ...c, amountMyr: round2(c.amountMyr) }))
+        .filter((c) => c.amountMyr > 0)
         .sort((a, b) => b.amountMyr - a.amountMyr);
 
     return {
@@ -371,8 +393,9 @@ export async function getTripSummary(tripId: number): Promise<TripSummary | null
         fundRemaining: fundReceived - fundSpent,
         cardMyr,
         linkedMyr: round2(linkedMyr),
-        spentMyr: round2(fundSpentMyr + cardMyr + linkedMyr),
-        tripTotalMyr: round2(exchangedMyr + cardMyr + linkedMyr),
+        reimbursedMyr: round2(reimbursedMyr),
+        spentMyr: round2(spentMyr),
+        tripTotalMyr: round2(exchangedMyr + cardMyr + linkedMyr - reimbursedMyr),
         days: tripDays(trip.startDate, trip.endDate),
         byCategory,
         latestExchangeRate,
