@@ -2095,7 +2095,10 @@ export async function handleToolCall(
                 },
             },
         ]);
-        await ctx.reply(toolResult.response.text());
+        // A weekly plan can pass Telegram's message cap, and an empty reply would be rejected.
+        // Sent as plain text, where Markdown's ** would show literally.
+        const suggestion = toolResult.response.text().replaceAll('**', '');
+        await replyInChunks(ctx, suggestion.trim() ? suggestion : '⚠️ No suggestion came back. Please try again.');
         return 'complete';
     } else if (call.name === 'log_meal') {
         const args = call.args as {

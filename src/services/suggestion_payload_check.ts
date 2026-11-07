@@ -1,4 +1,5 @@
 import {
+    buildWorkoutSuggestionData,
     normalizeSuggestHorizon,
     daysBackForHorizon,
     summarizeWorkoutsForSuggestion,
@@ -55,5 +56,16 @@ assert(summary.exerciseCounts.Squat === 2, 'squat count');
 assert(summary.lastLoads.Squat?.weightKg === 80, 'last load is newest');
 assert(summary.recentSessionLabels[0] === 'Leg day', 'session label once');
 assert(summary.recentSessionLabels.length === 1, 'dedupe session labels');
+
+// After a break an exercise leaves the recent window, but its last weight must stay known.
+const afterBreak = buildWorkoutSuggestionData(
+    [{ ...history[0], date: '2026-10-27' }, { ...history[1], exercise: 'Lat pulldown', weightKg: 32, date: '2026-10-14' }],
+    '2026-10-22',
+    14
+);
+assert(afterBreak.history.length === 1, 'history stops at the recent window');
+assert(afterBreak.exerciseCounts['Lat pulldown'] === undefined, 'counts stop at the recent window');
+assert(afterBreak.lastLoads['Lat pulldown']?.weightKg === 32, 'last load survives a break');
+assert(afterBreak.lastLoads['Lat pulldown']?.date === '2026-10-14', 'last load keeps its date');
 
 console.log('suggestion_payload_check: ok');

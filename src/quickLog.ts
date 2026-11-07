@@ -14,13 +14,21 @@ import { klIsoDate } from './utils/klDate';
  * The Weight and Steps buttons under the message box log without Gemini: a tap asks for the
  * number, and the next message that starts with a digit is saved for today ("… yesterday" for
  * yesterday). Any other message drops the tap and goes to Gemini as usual.
+ *
+ * The Suggest workout button is not a log: index.ts sends the tap to the workout specialist,
+ * which uses the AI to plan the next session from recent history.
  */
 
 export const WEIGHT_BUTTON = '⚖️ Weight';
 export const STEPS_BUTTON = '👣 Steps';
+export const SUGGEST_WORKOUT_BUTTON = '💪 Suggest workout';
+/** What the specialist reads when the button is tapped: the button's own label says too little. */
+export const SUGGEST_WORKOUT_REQUEST = 'What should I train today? Suggest my next workout.';
 
 /** Sent with /start and every quick-log reply, so the buttons come back if Telegram dropped them. */
-export const quickLogKeyboard = Markup.keyboard([[WEIGHT_BUTTON, STEPS_BUTTON]]).resize().persistent();
+export const quickLogKeyboard = Markup.keyboard([[WEIGHT_BUTTON, STEPS_BUTTON], [SUGGEST_WORKOUT_BUTTON]])
+    .resize()
+    .persistent();
 
 type QuickLogKind = 'weight' | 'steps';
 

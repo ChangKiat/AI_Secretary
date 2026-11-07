@@ -549,18 +549,37 @@ export async function deleteWorkoutsBySessionId(
     return result.count ?? 0;
 }
 
+/** After a break the recent window can be empty of an exercise, but its last weight still counts. */
+const LAST_LOAD_DAYS_BACK = 90;
+
+function isoDaysAgo(days: number): string {
+    const date = new Date();
+    date.setDate(date.getDate() - days);
+    return date.toISOString().slice(0, 10);
+}
+
 export async function getRecentWorkoutsForSuggestion(
     telegramUserId: number,
     daysBack = 14
 ) {
-    const end = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - daysBack);
-    const startStr = start.toISOString().slice(0, 10);
-    const endStr = end.toISOString().slice(0, 10);
+    // No end date: today in UTC would hide a session logged before 8am Malaysia time.
+    const rows = await getWorkoutHistory(telegramUserId, isoDaysAgo(LAST_LOAD_DAYS_BACK));
+    return buildWorkoutSuggestionData(rows, isoDaysAgo(daysBack), daysBack);
+}
 
-    const history = await getWorkoutHistory(telegramUserId, startStr, endStr);
-    return { history, daysBack, ...summarizeWorkoutsForSuggestion(history) };
+/** Rows are newest-first. History and counts stop at recentFrom; last loads use every row. */
+export function buildWorkoutSuggestionData(
+    rows: WorkoutExerciseRecord[],
+    recentFrom: string,
+    daysBack: number
+) {
+    const history = rows.filter((w) => w.date >= recentFrom);
+    return {
+        history,
+        daysBack,
+        ...summarizeWorkoutsForSuggestion(history),
+        lastLoads: summarizeWorkoutsForSuggestion(rows).lastLoads,
+    };
 }
 
 export type SuggestHorizon = 'today' | 'week';

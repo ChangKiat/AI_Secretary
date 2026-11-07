@@ -56,7 +56,12 @@ import {
     UserChatState,
     SpecialistDomain,
 } from './routing/router';
-import { handleQuickLogText, quickLogKeyboard } from './quickLog';
+import {
+    handleQuickLogText,
+    quickLogKeyboard,
+    SUGGEST_WORKOUT_BUTTON,
+    SUGGEST_WORKOUT_REQUEST,
+} from './quickLog';
 import { klIsoDate } from './utils/klDate';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
@@ -116,7 +121,7 @@ bot.use(async (ctx, next) => {
 
 bot.start(async (ctx) => {
     await ctx.reply(
-        'Tap ⚖️ Weight or 👣 Steps below to log them without the AI. For anything else, just type.',
+        'Tap ⚖️ Weight or 👣 Steps below to log them without the AI, or 💪 Suggest workout for your next session. For anything else, just type.',
         quickLogKeyboard
     );
 });
@@ -659,6 +664,10 @@ bot.on(message('text'), async (ctx) => {
 
     try {
         if (await handleQuickLogText(ctx, userMessage)) return;
+        if (userMessage.trim() === SUGGEST_WORKOUT_BUTTON) {
+            await routeAndExecute(ctx, userId, SUGGEST_WORKOUT_REQUEST, [], {}, { forceDomains: ['workout'] });
+            return;
+        }
         await routeAndExecute(ctx, userId, userMessage);
     } catch (error: unknown) {
         console.error('Error:', error);

@@ -12,6 +12,7 @@ A proactive personal assistant built with Node.js and TypeScript. Uses Claude or
 - **Gym**: Log workouts, view history, get suggestions
 - **Nutrition**: Log meals from photos with protein estimates, daily summaries, meal suggestions
 - **Weight and steps buttons**: Send `/start` once to show ⚖️ Weight and 👣 Steps under the message box. Tap one, then send the number (`85.5`, `9800`, `9.8k`, add `yesterday` for yesterday's); it's saved straight to the database without Gemini (`src/quickLog.ts`)
+- **Suggest workout button**: 💪 Suggest workout, also under the message box, asks the AI for your next session, based on your last 14 days of workouts and the weights you last used in the past 90 days. You can also type a request, such as `suggest a leg day` or `plan my training week`
 - **Automated billing and check-in**: Fixed expenses and interest accrual at 9:00 AM, and a 9:30 PM check-in on the day's meals, spending, workout and steps (Asia/Kuala_Lumpur). These run on the Dashboard server (`Dashboard/server/dailyJobs.ts`) and report here through this bot; the bot itself no longer schedules anything.
 
 ## Prerequisites
