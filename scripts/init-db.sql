@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS fixed_expenses (
     category TEXT NOT NULL DEFAULT 'Other',
     description TEXT NOT NULL,
     start_month INTEGER NOT NULL,
+    interval_days INTEGER,
+    interval_start_date TEXT,
     active BOOLEAN NOT NULL DEFAULT TRUE,
     payment_method TEXT,
     to_investment_account TEXT,

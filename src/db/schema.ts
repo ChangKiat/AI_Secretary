@@ -62,6 +62,9 @@ export const fixedExpenses = pgTable('fixed_expenses', {
     category: text('category').default('Other').notNull(),
     description: text('description').notNull(),
     startMonth: integer('start_month').notNull(),
+    /** Set for a bill that repeats every N days from intervalStartDate; day/frequency/start month are then unused. */
+    intervalDays: integer('interval_days'),
+    intervalStartDate: text('interval_start_date'),
     active: boolean('active').default(true).notNull(),
     paymentMethod: text('payment_method'),
     toInvestmentAccount: text('to_investment_account'),

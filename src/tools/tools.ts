@@ -240,13 +240,24 @@ function buildAddFixedExpenseDeclaration(): FunctionDeclaration {
     return {
         name: 'add_fixed_expense',
         description:
-            'Saves a new RECURRING or FIXED bill. Use this ANY TIME the user says "every month", "fixed", "recurring", "quarterly", or "yearly". An Investment bill needs paymentMethod (the account it is paid from) plus holding or toInvestmentAccount (where the money goes).',
+            'Saves a new RECURRING or FIXED bill. Use this ANY TIME the user says "every month", "fixed", "recurring", "quarterly", "yearly", or "every N days". A bill that repeats by a number of days (e.g. a 30-day transport pass renewed every 30 days) uses intervalDays + startDate instead of dayOfMonth. An Investment bill needs paymentMethod (the account it is paid from) plus holding or toInvestmentAccount (where the money goes).',
         parameters: {
             type: SchemaType.OBJECT,
             properties: {
                 dayOfMonth: {
                     type: SchemaType.NUMBER,
-                    description: 'The exact day of the month as an integer (1-31). If the user says "30th", output 30.',
+                    description:
+                        'The exact day of the month as an integer (1-31). If the user says "30th", output 30. Ignored when intervalDays is set (pass 1).',
+                },
+                intervalDays: {
+                    type: SchemaType.INTEGER,
+                    description:
+                        'Only for a bill that repeats every N DAYS rather than monthly (e.g. "every 30 days", "renews every 31 days"): the number of days between payments. Do not set for monthly/quarterly/yearly bills.',
+                },
+                startDate: {
+                    type: SchemaType.STRING,
+                    description:
+                        'Only with intervalDays: the first (or latest) payment date as YYYY-MM-DD; the bill repeats every intervalDays days from it. Defaults to today.',
                 },
                 amount: { type: SchemaType.NUMBER, description: 'The cost.' },
                 frequencyInMonths: { type: SchemaType.NUMBER, description: 'How often it occurs in months. Monthly = 1, Every 2 months = 2, Quarterly = 3, Yearly = 12.',
@@ -370,7 +381,7 @@ function buildUpdateFixedExpenseDeclaration(): FunctionDeclaration {
     return {
         name: 'update_fixed_expense',
         description:
-            'Changes an existing recurring bill: its amount (e.g. Netflix 55 → 60), day of month, paying account or destination account. Identify the bill by id (from get_all_fixed_expenses) or by description; use the id when several bills share a description. For a Loan bill the amount is the monthly installment.',
+            'Changes an existing recurring bill: its amount (e.g. Netflix 55 → 60), day of month, how many days apart it repeats, paying account or destination account. Identify the bill by id (from get_all_fixed_expenses) or by description; use the id when several bills share a description. For a Loan bill the amount is the monthly installment.',
         parameters: {
             type: SchemaType.OBJECT,
             properties: {
@@ -383,7 +394,21 @@ function buildUpdateFixedExpenseDeclaration(): FunctionDeclaration {
                     description: 'The name of the subscription or bill to update (e.g., "Netflix", "Gym"), when no id is known.',
                 },
                 newAmount: { type: SchemaType.NUMBER, description: 'Optional. The new cost or amount.' },
-                dayOfMonth: { type: SchemaType.INTEGER, description: 'Optional. The new day of the month (1-31).' },
+                dayOfMonth: {
+                    type: SchemaType.INTEGER,
+                    description:
+                        'Optional. The new day of the month (1-31). On a bill that repeats every N days this switches it back to monthly on that day.',
+                },
+                intervalDays: {
+                    type: SchemaType.INTEGER,
+                    description:
+                        'Optional. Make the bill repeat every this many days (e.g. 30) instead of on a day of the month, or change the number of days.',
+                },
+                startDate: {
+                    type: SchemaType.STRING,
+                    description:
+                        'Optional, for a bill that repeats every N days: the date (YYYY-MM-DD) it is next or was last paid; it repeats every intervalDays days from it. Use this when the user renewed on a different day.',
+                },
                 paymentMethod: {
                     type: SchemaType.STRING,
                     description: `Optional. The new account the bill is paid from. ${getExpensePaymentMethodDescription()}`,
@@ -400,7 +425,7 @@ function buildUpdateFixedExpenseDeclaration(): FunctionDeclaration {
 export const getAllFixedExpensesDeclaration: FunctionDeclaration = {
     name: 'get_all_fixed_expenses',
     description:
-        'Retrieves all active recurring/fixed bills with id, category, amount, day, from account (paymentMethod), destination (toInvestmentAccount), unit trust holding (instrumentName) and whether this month\'s buy is recorded (contributedThisMonth), and loan method and remaining balance. Use this when the user asks "what are my fixed expenses" or "show me my subscriptions".',
+        'Retrieves all active recurring/fixed bills with id, category, amount, day, from account (paymentMethod), destination (toInvestmentAccount), unit trust holding (instrumentName) and whether this month\'s buy is recorded (contributedThisMonth), for bills that repeat every N days the interval (intervalDays) and next date (nextDueDate), and loan method and remaining balance. Use this when the user asks "what are my fixed expenses" or "show me my subscriptions".',
     parameters: { type: SchemaType.OBJECT, properties: {} },
 };
 

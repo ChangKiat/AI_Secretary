@@ -17,6 +17,7 @@ import {
     attachHoldingContributionStatus,
     resolveContributionHolding,
 } from '../services/fixedContributionService';
+import { addDays, nextIntervalDueDate } from '../services/fixedSchedule';
 import {
     fundingDestination,
     isInvestmentCategory,
@@ -193,6 +194,29 @@ function isDayOfMonth(day: number): boolean {
     return Number.isInteger(day) && day >= 1 && day <= 31;
 }
 
+function isIntervalDays(days: number): boolean {
+    return Number.isInteger(days) && days >= 1 && days <= 3650;
+}
+
+/** A real calendar date written YYYY-MM-DD. */
+function isRealDate(date: string): boolean {
+    return /^\d{4}-\d{2}-\d{2}$/.test(date) && addDays(date, 0) === date;
+}
+
+function todayKL(): string {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
+}
+
+/** "day 5", or "every 30 days from 2026-11-11" for a bill that repeats by days. */
+function scheduleLabel(bill: Pick<FixedBill, 'dayOfMonth' | 'intervalDays' | 'intervalStartDate'>): string {
+    return bill.intervalDays != null
+        ? `every ${bill.intervalDays} days from ${bill.intervalStartDate ?? '?'}`
+        : `day ${bill.dayOfMonth}`;
+}
+
+const INTERVAL_DAYS_TEXT = '⚠️ The number of days between payments must be a whole number from 1 to 3650.';
+const INTERVAL_START_TEXT = '⚠️ The first payment date must be a real date written YYYY-MM-DD.';
+
 function frequencyWord(frequency: number): string {
     if (frequency === 1) return 'monthly';
     if (frequency === 3) return 'quarterly';
@@ -204,7 +228,7 @@ function billLabel(bill: FixedBill): string {
     const accounts =
         (bill.paymentMethod ? `, ${bill.paymentMethod}` : '') +
         (bill.toInvestmentAccount ? ` → ${bill.toInvestmentAccount}` : '');
-    return `#${bill.id} ${bill.description} (${bill.category}, ${bill.currency} ${bill.amount}, day ${bill.dayOfMonth}${accounts})`;
+    return `#${bill.id} ${bill.description} (${bill.category}, ${bill.currency} ${bill.amount}, ${scheduleLabel(bill)}${accounts})`;
 }
 
 /**
@@ -242,6 +266,9 @@ export interface AddFixedExpenseArgs {
     dayOfMonth?: number;
     amount: number;
     frequencyInMonths?: number;
+    /** Repeat every N days from startDate (e.g. a 30-day pass) instead of on a day of the month. */
+    intervalDays?: number;
+    startDate?: string;
     currency?: string;
     category?: string;
     description?: string;
@@ -260,25 +287,49 @@ export async function addFixedExpenseTool(
     if (!Number.isFinite(amount) || amount <= 0) {
         return respond(chat, ctx, name, { status: 'invalid_amount' }, '⚠️ The bill amount must be a positive number.');
     }
-    const finalDay = Number(args.dayOfMonth || 1);
+    // Every-N-days bill: the day, frequency and start month are taken from its first date.
+    let interval: { days: number; startDate: string } | null = null;
+    if (args.intervalDays != null && Number(args.intervalDays) !== 0) {
+        const days = Number(args.intervalDays);
+        if (!isIntervalDays(days)) {
+            return respond(chat, ctx, name, { status: 'invalid_interval' }, INTERVAL_DAYS_TEXT);
+        }
+        const startDate = textArg(args.startDate) || todayKL();
+        if (!isRealDate(startDate)) {
+            return respond(chat, ctx, name, { status: 'invalid_start_date' }, INTERVAL_START_TEXT);
+        }
+        interval = { days, startDate };
+    }
+    const finalDay = interval ? Number(interval.startDate.slice(8, 10)) : Number(args.dayOfMonth || 1);
     if (!isDayOfMonth(finalDay)) {
         return respond(chat, ctx, name, { status: 'invalid_day' }, '⚠️ The day of the month must be a whole number from 1 to 31.');
     }
-    const frequency = Number(args.frequencyInMonths || 1);
+    const frequency = interval ? 1 : Number(args.frequencyInMonths || 1);
     if (!Number.isInteger(frequency) || frequency < 1) {
         return respond(chat, ctx, name, { status: 'invalid_frequency' }, '⚠️ How often it repeats must be a whole number of months.');
     }
-    const startMonth = parseInt(
-        new Date().toLocaleString('en-US', {
-            timeZone: 'Asia/Kuala_Lumpur',
-            month: 'numeric',
-        })
-    );
+    const startMonth = interval
+        ? Number(interval.startDate.slice(5, 7))
+        : parseInt(
+              new Date().toLocaleString('en-US', {
+                  timeZone: 'Asia/Kuala_Lumpur',
+                  month: 'numeric',
+              })
+          );
     const currency = args.currency || 'MYR';
     const holdingInput = textArg(args.holding);
     // A unit trust holding is only valid on an Investment bill, so it implies that category.
     const category = resolveCategory(args.category || (holdingInput ? 'Investment' : undefined));
     const description = args.description || `Recurring ${category}`;
+    if (interval && (holdingInput || category.toLowerCase() === 'loan')) {
+        return respond(
+            chat,
+            ctx,
+            name,
+            { status: 'interval_not_allowed', category },
+            '⚠️ Loan bills and unit trust bills repeat monthly, so they need a day of the month instead of a number of days.'
+        );
+    }
 
     const from = await resolveAccountArg(args.paymentMethod);
     if (!from.ok) {
@@ -355,7 +406,8 @@ export async function addFixedExpenseTool(
             paymentMethod,
             toInvestmentAccount,
             null,
-            instrumentId
+            instrumentId,
+            interval
         );
     } catch (err) {
         return respond(chat, ctx, name, { status: 'error', error: errorText(err) }, `⚠️ Couldn't save the bill: ${errorText(err)}`);
@@ -372,12 +424,15 @@ export async function addFixedExpenseTool(
                     paymentMethod,
                     toInvestmentAccount: destination,
                     holding: holdingName,
+                    ...(interval ? { intervalDays: interval.days, startDate: interval.startDate } : {}),
                 },
             },
         },
     ]);
     const parts = [
-        `🔄 Done! I've set up a ${frequencyWord(frequency)} rule to log ${currency} ${amount} for ${description} on the ${finalDay} of the month.`,
+        interval
+            ? `🔄 Done! I've set up a rule to log ${currency} ${amount} for ${description} every ${interval.days} days, starting ${interval.startDate} (next: ${nextIntervalDueDate(interval.startDate, interval.days, todayKL())}).`
+            : `🔄 Done! I've set up a ${frequencyWord(frequency)} rule to log ${currency} ${amount} for ${description} on the ${finalDay} of the month.`,
     ];
     if (paymentMethod) parts.push(`Paid via: ${paymentMethod}.`);
     if (destination) parts.push(`Goes to: ${destination}${holdingName ? ` · ${holdingName}` : ''}.`);
@@ -396,6 +451,9 @@ export interface UpdateFixedExpenseArgs {
     description?: string;
     newAmount?: number;
     dayOfMonth?: number;
+    /** Repeat every N days from startDate instead of on a day of the month. */
+    intervalDays?: number;
+    startDate?: string;
     paymentMethod?: string;
     toInvestmentAccount?: string;
 }
@@ -439,13 +497,55 @@ export async function updateFixedExpenseTool(
                 (bill.loanMethod ? ' (the monthly installment; the loan balance is unchanged)' : '')
         );
     }
-    if (args.dayOfMonth != null) {
+    const intervalGiven = args.intervalDays != null && Number(args.intervalDays) !== 0;
+    const startGiven = textArg(args.startDate) !== '';
+    if (intervalGiven || startGiven) {
+        const days = intervalGiven ? Number(args.intervalDays) : bill.intervalDays;
+        if (days == null) {
+            return respond(
+                chat,
+                ctx,
+                name,
+                { status: 'needs_interval' },
+                `"${bill.description}" repeats on day ${bill.dayOfMonth} of the month. How many days apart should it repeat instead?`,
+                'awaiting_input'
+            );
+        }
+        if (!isIntervalDays(days)) {
+            return respond(chat, ctx, name, { status: 'invalid_interval' }, INTERVAL_DAYS_TEXT);
+        }
+        const startDate = textArg(args.startDate) || bill.intervalStartDate || todayKL();
+        if (!isRealDate(startDate)) {
+            return respond(chat, ctx, name, { status: 'invalid_start_date' }, INTERVAL_START_TEXT);
+        }
+        if (bill.loanMethod || bill.category.toLowerCase() === 'loan' || bill.instrumentId != null) {
+            return respond(
+                chat,
+                ctx,
+                name,
+                { status: 'interval_not_allowed', category: bill.category },
+                `⚠️ "${bill.description}" is a ${bill.instrumentId != null ? 'unit trust' : 'Loan'} bill, which repeats monthly, so it keeps a day of the month.`
+            );
+        }
+        fields.intervalDays = days;
+        fields.intervalStartDate = startDate;
+        fields.dayOfMonth = Number(startDate.slice(8, 10));
+        changes.push(
+            `repeats ${scheduleLabel(bill)} → every ${days} days from ${startDate} (next: ${nextIntervalDueDate(startDate, days, todayKL())})`
+        );
+    } else if (args.dayOfMonth != null) {
         const day = Number(args.dayOfMonth);
         if (!isDayOfMonth(day)) {
             return respond(chat, ctx, name, { status: 'invalid_day' }, '⚠️ The day of the month must be a whole number from 1 to 31.');
         }
         fields.dayOfMonth = day;
-        changes.push(`day ${bill.dayOfMonth} → ${day}`);
+        if (bill.intervalDays != null) {
+            // Naming a day of the month puts an every-N-days bill back on the monthly schedule.
+            fields.intervalDays = null;
+            changes.push(`repeats ${scheduleLabel(bill)} → day ${day} of the month`);
+        } else {
+            changes.push(`day ${bill.dayOfMonth} → ${day}`);
+        }
     }
 
     const fromGiven = textArg(args.paymentMethod) !== '';
@@ -536,7 +636,7 @@ export async function updateFixedExpenseTool(
             ctx,
             name,
             { status: 'nothing_to_update', bill: billLabel(bill) },
-            `What should I change on ${billLabel(bill)}: the amount, day of month, paying account or destination?`,
+            `What should I change on ${billLabel(bill)}: the amount, day of month, how many days apart it repeats, paying account or destination?`,
             'awaiting_input'
         );
     }
@@ -567,6 +667,7 @@ export async function updateFixedExpenseTool(
 /** get_all_fixed_expenses: the Dashboard Fixed table's view of each active bill. */
 export async function listFixedExpensesTool(chat: ChatSession, ctx: Context): Promise<ToolCallResult> {
     const bills = await attachHoldingContributionStatus(await getActiveFixedExpenses());
+    const today = todayKL();
     const expenses = bills
         .sort((a, b) => a.dayOfMonth - b.dayOfMonth || a.id - b.id)
         .map((bill) => ({
@@ -575,8 +676,14 @@ export async function listFixedExpensesTool(chat: ChatSession, ctx: Context): Pr
             category: bill.category,
             amount: bill.amount,
             currency: bill.currency,
-            dayOfMonth: bill.dayOfMonth,
-            frequencyMonths: bill.frequencyMonths,
+            // An every-N-days bill has no day of the month: it shows its interval and next date.
+            dayOfMonth: bill.intervalDays != null ? null : bill.dayOfMonth,
+            frequencyMonths: bill.intervalDays != null ? null : bill.frequencyMonths,
+            intervalDays: bill.intervalDays,
+            nextDueDate:
+                bill.intervalDays != null && bill.intervalStartDate
+                    ? nextIntervalDueDate(bill.intervalStartDate, bill.intervalDays, today)
+                    : null,
             paymentMethod: bill.paymentMethod,
             toInvestmentAccount: bill.toInvestmentAccount,
             instrumentName: bill.instrumentName,
@@ -592,6 +699,7 @@ export async function listFixedExpensesTool(chat: ChatSession, ctx: Context): Pr
                     expenses,
                     note:
                         'Show each bill with its #id. paymentMethod = paid from; toInvestmentAccount = where the money goes (Investment/Other). ' +
+                        'A bill with intervalDays repeats every that many days, not on a day of the month: show "every N days, next <nextDueDate>". ' +
                         'contributedThisMonth applies only to unit trust bills (instrumentName set): true = this month\'s buy is recorded, false = not yet. ' +
                         'remainingPrincipal is the loan balance for Loan bills with loan terms; their amount is the monthly installment.',
                 },
@@ -604,7 +712,13 @@ export async function listFixedExpensesTool(chat: ChatSession, ctx: Context): Pr
             ? text
             : expenses.length > 0
               ? expenses
-                    .map((e) => `#${e.id} ${e.description}: ${e.currency} ${e.amount}, day ${e.dayOfMonth}`)
+                    .map(
+                        (e) =>
+                            `#${e.id} ${e.description}: ${e.currency} ${e.amount}, ` +
+                            (e.intervalDays != null
+                                ? `every ${e.intervalDays} days, next ${e.nextDueDate ?? '?'}`
+                                : `day ${e.dayOfMonth}`)
+                    )
                     .join('\n')
               : 'You have no active recurring bills.'
     );

@@ -10,7 +10,7 @@ import {
     setPaymentAccountsCache,
 } from '../config/paymentMethods';
 import { getReimbursementsByExpenseIds, getUnlinkedIncomeTotal, deleteIncomesByExpenseId, getTransferFeesForSpendingSummary } from './incomeService';
-import { isFrequencyDue, lastDayOfMonth } from './fixedSchedule';
+import { isFrequencyDue, isIntervalDue, lastDayOfMonth } from './fixedSchedule';
 import type { PaymentAccount } from './paymentAccountService';
 import {
     computeInstallmentSplit,
@@ -536,7 +536,9 @@ export async function addFixedExpense(
     paymentMethod?: string | null,
     toInvestmentAccount?: string | null,
     loan?: FixedExpenseLoanFields | null,
-    instrumentId?: number | null
+    instrumentId?: number | null,
+    /** Repeat every `days` days from `startDate` instead of on `dayOfMonth`. */
+    interval?: { days: number; startDate: string } | null
 ) {
     const db = requireDb();
     const resolvedCategory = resolveCategory(category);
@@ -553,6 +555,8 @@ export async function addFixedExpense(
         description,
         frequencyMonths: frequency,
         startMonth,
+        intervalDays: interval?.days ?? null,
+        intervalStartDate: interval?.startDate ?? null,
         active: true,
         paymentMethod: resolvePaymentMethod(paymentMethod),
         toInvestmentAccount: keepDestination
@@ -645,13 +649,28 @@ export async function isFixedContributionRecorded(
     return rows.some((row) => isBillContributionBuy(row, exp));
 }
 
-/** Due on this date: a day 29-31 bill falls on the last day of a shorter month. Month is 1-based. */
+/**
+ * Due on this date. Month is 1-based.
+ * - Every-N-days bill (intervalDays set): on its start date and every N days after.
+ * - Otherwise by day of month: a day 29-31 bill falls on the last day of a shorter month.
+ */
 function isFixedExpenseDueOn(
-    row: { dayOfMonth: number; startMonth: number; frequencyMonths: number },
+    row: {
+        dayOfMonth: number;
+        startMonth: number;
+        frequencyMonths: number;
+        intervalDays?: number | null;
+        intervalStartDate?: string | null;
+    },
     year: number,
     month: number,
     day: number
 ): boolean {
+    if (row.intervalDays != null) {
+        if (!row.intervalStartDate) return false;
+        const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        return isIntervalDue(row.intervalStartDate, row.intervalDays, date);
+    }
     if (day !== Math.min(row.dayOfMonth, lastDayOfMonth(year, month))) return false;
     return isFrequencyDue(row.startMonth, row.frequencyMonths, month);
 }
@@ -874,6 +893,8 @@ export async function getActiveFixedExpenses() {
         dayOfMonth: row.dayOfMonth,
         frequencyMonths: row.frequencyMonths,
         startMonth: row.startMonth,
+        intervalDays: row.intervalDays ?? null,
+        intervalStartDate: row.intervalStartDate ?? null,
         currency: row.currency,
         paymentMethod: displayPaymentMethod(row.paymentMethod),
         toInvestmentAccount: displayPaymentMethod(row.toInvestmentAccount),
@@ -890,6 +911,9 @@ export async function updateFixedExpenseById(
         amount?: number;
         dayOfMonth?: number;
         frequencyMonths?: number;
+        /** A number (with intervalStartDate) repeats every N days; null goes back to day of month. */
+        intervalDays?: number | null;
+        intervalStartDate?: string | null;
         paymentMethod?: string | null;
         toInvestmentAccount?: string | null;
         instrumentId?: number | null;
@@ -912,6 +936,13 @@ export async function updateFixedExpenseById(
     if (fields.amount != null) set.amount = String(fields.amount);
     if (fields.dayOfMonth != null) set.dayOfMonth = fields.dayOfMonth;
     if (fields.frequencyMonths != null) set.frequencyMonths = fields.frequencyMonths;
+    if (fields.intervalDays !== undefined) {
+        set.intervalDays = fields.intervalDays;
+        if (fields.intervalDays == null) set.intervalStartDate = null;
+    }
+    if (fields.intervalStartDate != null && fields.intervalDays !== null) {
+        set.intervalStartDate = fields.intervalStartDate;
+    }
 
     const guardsPayment = fields.paymentMethod !== undefined;
     const guardsDestination = fields.toInvestmentAccount !== undefined && !dropsDestination;
@@ -1076,6 +1107,19 @@ if (require.main === module) {
     expectEq(isFixedExpenseDueOn(bill(15), 2026, 2, 28), false, 'day 15 not due on 28 Feb');
     expectEq(isFixedExpenseDueOn(bill(31, 1, 3), 2026, 4, 30), true, 'quarterly day 31 due on 30 Apr');
     expectEq(isFixedExpenseDueOn(bill(31, 1, 3), 2026, 6, 30), false, 'quarterly day 31 not due in Jun');
+
+    // Every-N-days bill: the day of month is ignored.
+    const pass = { ...bill(11), intervalDays: 30, intervalStartDate: '2026-11-11' };
+    expectEq(isFixedExpenseDueOn(pass, 2026, 11, 11), true, '30-day pass due on its start date');
+    expectEq(isFixedExpenseDueOn(pass, 2026, 12, 11), true, '30-day pass due 30 days later');
+    expectEq(isFixedExpenseDueOn(pass, 2027, 1, 10), true, '30-day pass due 60 days later');
+    expectEq(isFixedExpenseDueOn(pass, 2027, 1, 11), false, '30-day pass not due on its old day of month');
+    expectEq(isFixedExpenseDueOn(pass, 2026, 10, 12), false, '30-day pass not due before its start date');
+    expectEq(
+        isFixedExpenseDueOn({ ...bill(11), intervalDays: 30, intervalStartDate: null }, 2026, 11, 11),
+        false,
+        'every-N-days bill with no start date is never due'
+    );
 
     // Write guard: unchanged values are kept even when they no longer resolve; new values must resolve.
     const account = (id: number, name: string, active = true): PaymentAccount => ({
