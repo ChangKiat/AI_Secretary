@@ -2,6 +2,7 @@ import { pgTable, serial, text, numeric, integer, boolean, timestamp, bigint, js
 
 export const trips = pgTable('trips', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     name: text('name').notNull(),
     startDate: text('start_date'),
     endDate: text('end_date'),
@@ -12,6 +13,7 @@ export const trips = pgTable('trips', {
 
 export const expenses = pgTable('expenses', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     date: text('date').notNull(),
     amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
     currency: text('currency').default('MYR').notNull(),
@@ -29,6 +31,7 @@ export const expenses = pgTable('expenses', {
 
 export const incomes = pgTable('incomes', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     date: text('date').notNull(),
     amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
     currency: text('currency').default('MYR').notNull(),
@@ -48,6 +51,7 @@ export const incomes = pgTable('incomes', {
 
 export const budgets = pgTable('budgets', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     category: text('category').notNull().unique(),
     monthlyBudget: numeric('monthly_budget', { precision: 12, scale: 2 }).notNull(),
     currency: text('currency').default('MYR').notNull(),
@@ -55,6 +59,7 @@ export const budgets = pgTable('budgets', {
 
 export const fixedExpenses = pgTable('fixed_expenses', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     dayOfMonth: integer('day_of_month').notNull(),
     amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
     frequencyMonths: integer('frequency_months').default(1).notNull(),
@@ -83,6 +88,7 @@ export const fixedExpenses = pgTable('fixed_expenses', {
 
 export const loanPayments = pgTable('loan_payments', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     fixedExpenseId: integer('fixed_expense_id')
         .notNull()
         .references(() => fixedExpenses.id),
@@ -98,6 +104,7 @@ export const loanPayments = pgTable('loan_payments', {
 /** daily | monthly */
 export const interestSchedules = pgTable('interest_schedules', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     paymentMethod: text('payment_method').notNull(),
     frequency: text('frequency').notNull(),
     dayOfMonth: integer('day_of_month'),
@@ -111,6 +118,7 @@ export const interestSchedules = pgTable('interest_schedules', {
 
 export const paymentAccounts = pgTable('payment_accounts', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     name: text('name').notNull().unique(),
     accountType: text('account_type').default('account').notNull(),
     initialBalance: numeric('initial_balance', { precision: 12, scale: 2 }).default('0').notNull(),
@@ -124,6 +132,7 @@ export const paymentAccounts = pgTable('payment_accounts', {
 
 export const workouts = pgTable('workouts', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     telegramUserId: bigint('telegram_user_id', { mode: 'number' }).notNull(),
     date: text('date').notNull(),
     exercise: text('exercise').notNull(),
@@ -143,6 +152,7 @@ export const workouts = pgTable('workouts', {
 
 export const meals = pgTable('meals', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     telegramUserId: bigint('telegram_user_id', { mode: 'number' }).notNull(),
     date: text('date').notNull(),
     mealType: text('meal_type'),
@@ -156,6 +166,7 @@ export const meals = pgTable('meals', {
 });
 
 export const userSettings = pgTable('user_settings', {
+    userId: integer('user_id').references(() => users.id),
     telegramUserId: bigint('telegram_user_id', { mode: 'number' }).primaryKey(),
     dailyProteinTargetG: numeric('daily_protein_target_g', { precision: 8, scale: 2 }).default('150').notNull(),
     dailyCalorieTarget: numeric('daily_calorie_target', { precision: 8, scale: 2 }).default('2200').notNull(),
@@ -174,6 +185,7 @@ export const bodyWeightLogs = pgTable(
     'body_weight_logs',
     {
         id: serial('id').primaryKey(),
+        userId: integer('user_id').references(() => users.id),
         telegramUserId: bigint('telegram_user_id', { mode: 'number' }).notNull(),
         date: text('date').notNull(),
         weightKg: numeric('weight_kg', { precision: 6, scale: 2 }).notNull(),
@@ -186,6 +198,7 @@ export const dailyActivityLogs = pgTable(
     'daily_activity_logs',
     {
         id: serial('id').primaryKey(),
+        userId: integer('user_id').references(() => users.id),
         telegramUserId: bigint('telegram_user_id', { mode: 'number' }).notNull(),
         date: text('date').notNull(),
         steps: integer('steps').notNull(),
@@ -197,6 +210,7 @@ export const dailyActivityLogs = pgTable(
 /** equity | fund | fd | other */
 export const investmentInstruments = pgTable('investment_instruments', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     paymentAccountId: integer('payment_account_id')
         .notNull()
         .references(() => paymentAccounts.id),
@@ -217,6 +231,7 @@ export const investmentInstruments = pgTable('investment_instruments', {
 /** buy | sell | dividend | interest | fee | price_mark */
 export const investmentEvents = pgTable('investment_events', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     instrumentId: integer('instrument_id')
         .notNull()
         .references(() => investmentInstruments.id),
@@ -234,6 +249,7 @@ export const investmentEvents = pgTable('investment_events', {
 
 export const investmentLots = pgTable('investment_lots', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     instrumentId: integer('instrument_id')
         .notNull()
         .references(() => investmentInstruments.id),
@@ -248,6 +264,7 @@ export const investmentLots = pgTable('investment_lots', {
 /** Material | Lubricants | Labour | Other */
 export const carServiceVisits = pgTable('car_service_visits', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     date: text('date').notNull(),
     odometerKm: integer('odometer_km').notNull(),
     notes: text('notes'),
@@ -256,6 +273,7 @@ export const carServiceVisits = pgTable('car_service_visits', {
 
 export const carServiceItems = pgTable('car_service_items', {
     id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
     visitId: integer('visit_id')
         .notNull()
         .references(() => carServiceVisits.id, { onDelete: 'cascade' }),
