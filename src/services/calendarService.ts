@@ -20,6 +20,18 @@ export type CreatedCalendarEvent = {
     onBotPrivateCalendar: boolean;
 };
 
+export class CalendarCreateError extends Error {}
+
+function parseEventTime(value: string, label: string): Date {
+    const match = typeof value === 'string' &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/.exec(value);
+    const time = match ? new Date(match[1] ? value : `${value}+08:00`) : new Date(NaN);
+    if (!Number.isFinite(time.getTime())) {
+        throw new CalendarCreateError(`I need a valid ${label} date and time for the event.`);
+    }
+    return time;
+}
+
 /** Says where the event really went, so a save the user can't see never reads as a success. */
 export function formatCalendarEventReply(title: string, event: CreatedCalendarEvent): string {
     const when = new Date(event.start).toLocaleString('en-MY', {
@@ -61,22 +73,24 @@ export async function createCalendarEvent(
     endDateTime: string,
     description: string = ''
 ): Promise<CreatedCalendarEvent> {
-    try {
-        if (!startDateTime || startDateTime === '') {
-            throw new Error('Start date is missing. I need a specific date and time.');
-        }
+    const start = parseEventTime(startDateTime, 'start');
+    const end = endDateTime
+        ? parseEventTime(endDateTime, 'end')
+        : new Date(start.getTime() + 60 * 60 * 1000);
+    if (end <= start) {
+        throw new CalendarCreateError('The event end time must be after its start time.');
+    }
 
+    try {
         const event = {
             summary: title,
             description: description,
             start: {
-                dateTime: startDateTime,
+                dateTime: start.toISOString(),
                 timeZone: TIMEZONE,
             },
             end: {
-                dateTime:
-                    endDateTime ||
-                    new Date(new Date(startDateTime).getTime() + 60 * 60 * 1000).toISOString(),
+                dateTime: end.toISOString(),
                 timeZone: TIMEZONE,
             },
         };
@@ -88,15 +102,38 @@ export async function createCalendarEvent(
 
         const organizer = response.data.organizer;
         return {
-            start: response.data.start?.dateTime || startDateTime,
+            start: response.data.start?.dateTime || start.toISOString(),
             calendarName: organizer?.displayName,
             onBotPrivateCalendar:
                 organizer?.email?.endsWith('.gserviceaccount.com') ?? CALENDAR_ID === 'primary',
         };
-    } catch (error: any) {
-        console.error('--- RAW CALENDAR ERROR ---');
-        console.dir(error.response?.data || error, { depth: null });
-        throw new Error('Failed to create the calendar event.');
+    } catch (error) {
+        const failure = error as {
+            response?: { status?: number; data?: { error?: { message?: string; errors?: { reason?: string }[] } } };
+            message?: string;
+            code?: string;
+        };
+        const status = failure.response?.status;
+        const details = failure.response?.data?.error;
+        const reason = details?.errors?.[0]?.reason;
+        console.error('Calendar event creation failed', {
+            status, reason, message: details?.message || failure.message, code: failure.code,
+        });
+        if (reason === 'accessNotConfigured') {
+            throw new CalendarCreateError('Enable the Google Calendar API in the bot’s Google Cloud project.');
+        }
+        if (status === 401 || failure.code === 'ENOENT') {
+            throw new CalendarCreateError('Check the bot’s Google credentials on the deployed service.');
+        }
+        if (status === 404 || (status === 403 && (reason === 'forbidden' || reason === 'requiredAccessLevel'))) {
+            throw new CalendarCreateError(
+                'Check GOOGLE_CALENDAR_ID on the deployed bot and give its Google service account permission to make changes to that calendar.'
+            );
+        }
+        if (status === 400) {
+            throw new CalendarCreateError('Google Calendar rejected the event details. Check the start and end times and try again.');
+        }
+        throw new CalendarCreateError('I couldn’t confirm the event was created. Check your calendar before trying again.');
     }
 }
 

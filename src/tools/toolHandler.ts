@@ -64,6 +64,7 @@ import {
     type InterestFrequency,
 } from '../services/interestScheduleService';
 import {
+    CalendarCreateError,
     createCalendarEvent,
     formatCalendarEventReply,
     getSchedule,
@@ -1646,7 +1647,9 @@ export async function handleToolCall(
             return 'complete';
         } catch (error) {
             console.error('Tool Execution Error:', error);
-            await ctx.reply('I had a problem connecting to the calendar. Please try again in a moment.');
+            await ctx.reply(error instanceof CalendarCreateError
+                ? error.message
+                : 'I couldn’t confirm the event was created. Check your calendar before trying again.');
             return 'complete';
         }
     } else if (call.name === 'check_schedule') {
