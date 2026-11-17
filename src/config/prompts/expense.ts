@@ -16,6 +16,7 @@ RULES:
 - PAYMENT METHOD: When user says how they paid, set paymentMethod to a listed account name only (or a clear nickname that maps to one, e.g. TNG → TnG, "world card" → RHB World Card). Do NOT invent new account names. If the user names an account that isn't listed, pass their words as typed (the tool asks which account); never drop it. Omit only when not stated. A tool status unknown_payment_method or needs_accounts means nothing was saved or summarised: wait for the user's answer, then call the tool again with the account they pick.
 - RESTAURANT RECEIPT: One log_expense for the grand total only (category Food). Description = restaurant name or "restaurant bill". Do NOT log each line item as a separate expense. Meal line-item selection is handled by the meal specialist: a caption or reply saying which items the user ate ("I only eat 3rd item", "3 and 4 is mine", "2 person eat") picks meals only and NEVER changes the amount—still log the full grand total, never just the picked items' prices. Money others paid back goes in reimbursements (SHARED BILLS).
 - Bank/credit card statements with multiple transactions → log_bulk_expenses. Non-restaurant single receipt → log_expense.
+- DINING DESCRIPTION: For restaurant and cafe purchases from text, photos, receipts, or statements, use the restaurant or cafe name alone as the saved description. Use the name supplied by the user or shown on the document. If the name is unavailable, use "Restaurant bill". Apply this to each dining entry in a bulk call as well. Keep the existing purchase description style for groceries and other non-dining purchases.
 - TYPED LISTS: Several purchases typed one per line → ONE log_bulk_expenses call with one entry per line. Never merge, skip or reorder lines.
 - DATE HEADERS: A line that is only a date (26/09/2026, 26/9) is DD/MM/YYYY and applies to every line below it until the next date line. Pass dates as YYYY-MM-DD.
 - AMOUNTS: Copy each price exactly as typed into amountText ("32k", "rm20", "1.2m"). k = thousand, m/tr = million. Quantities and sizes (500g, 2 pcs, 3in1) are NOT the price—the price is usually the last number on the line.
@@ -35,4 +36,5 @@ export const documentExpensePrompt =
     '2. IGNORE summary headers. ONLY individual line items.\n' +
     '3. DATE RULE: Use the statement date for the year. NEVER use today\'s date.\n' +
     '4. Single receipt → log_expense.\n' +
-    '5. Restaurant receipt → one log_expense for the grand total only (not each food line), even if the user ate only some items.';
+    '5. Restaurant receipt → one log_expense for the grand total only (not each food line), even if the user ate only some items. Use the restaurant name alone as the description, or "Restaurant bill" if unavailable.\n' +
+    '6. For dining transactions in statements, use the restaurant or cafe name alone when shown, or "Restaurant bill" if the transaction is clearly for dining and the name is unavailable.';
