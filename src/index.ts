@@ -63,6 +63,7 @@ import {
     SUGGEST_WORKOUT_REQUEST,
 } from './quickLog';
 import { klIsoDate } from './utils/klDate';
+import { linkTelegramByCode } from './services/userService';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const MY_CHAT_ID = process.env.MY_TELEGRAM_CHAT_ID!;
@@ -105,10 +106,45 @@ bot.catch((err, ctx) => {
     console.error(err);
 });
 
-// This bot is a single-user personal assistant — reject anyone but the owner
-// before any Gemini call or DB write happens.
+/** `/link <code>`: connects the sender's Telegram account to the Dashboard account that issued the code. */
+async function handleLinkCommand(ctx: import('telegraf').Context, code: string | undefined): Promise<void> {
+    if (!code) {
+        await ctx.reply('Open your Dashboard profile, press Connect Telegram, then send the /link message it shows you.');
+        return;
+    }
+    try {
+        const result = await linkTelegramByCode(code, ctx.from!.id);
+        if (result.status === 'invalid') {
+            await ctx.reply('That code is wrong or has expired. Get a new one from your Dashboard profile.');
+        } else if (result.status === 'already') {
+            await ctx.reply(
+                `This Telegram account is already connected to ${result.email}. Disconnect it in the Dashboard profile first.`
+            );
+        } else if (ctx.from!.id === AUTHORIZED_USER_ID) {
+            await ctx.reply(`✅ Telegram connected to ${result.email}.`);
+        } else {
+            await ctx.reply(
+                `✅ Telegram connected to ${result.email}. The bot is not open to new accounts yet, so it will not answer other messages for now.`
+            );
+        }
+    } catch (err) {
+        console.error('Telegram link failed:', err);
+        await ctx.reply('Could not connect right now. Try again in a minute.');
+    }
+}
+
+// Anyone may send /link (it only connects their own Telegram account). Everything else is still
+// owner-only: the finance tables are not split per user yet, so reject other senders before any
+// AI call or DB write happens.
 bot.use(async (ctx, next) => {
-    if (!ctx.from || ctx.from.id !== AUTHORIZED_USER_ID) {
+    if (!ctx.from) return;
+    const text = ctx.message && 'text' in ctx.message ? ctx.message.text : '';
+    const linkCommand = /^\/link(?:@\w+)?(?:\s+(\S+))?\s*$/i.exec(text);
+    if (linkCommand) {
+        await handleLinkCommand(ctx, linkCommand[1]);
+        return;
+    }
+    if (ctx.from.id !== AUTHORIZED_USER_ID) {
         console.warn(
             `🚫 Blocked message from unauthorized user ${ctx.from?.id} (@${ctx.from?.username ?? 'unknown'})`
         );

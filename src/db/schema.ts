@@ -264,3 +264,16 @@ export const carServiceItems = pgTable('car_service_items', {
     amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+/** One row per Google account that has signed in to the Dashboard. */
+export const users = pgTable('users', {
+    id: serial('id').primaryKey(),
+    /** Lowercased Google email. */
+    email: text('email').notNull().unique(),
+    /** Set by the bot's /link command; null until the user connects Telegram. */
+    telegramUserId: bigint('telegram_user_id', { mode: 'number' }).unique(),
+    /** One-time code shown on the profile page, cleared once used. */
+    telegramLinkCode: text('telegram_link_code').unique(),
+    telegramLinkCodeExpiresAt: timestamp('telegram_link_code_expires_at', { withTimezone: true }),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});
