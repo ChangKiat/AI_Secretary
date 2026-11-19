@@ -14,6 +14,7 @@ Multi-domain examples:
 - Pure food log with no price ("had nasi lemak", "2 pcs roti") → meal only
 - Nutrition progress ("how much protein today", "macro summary") → meal only (not expense)
 - Restaurant / food-outlet receipt image → expense AND meal (expense logs bill total; meal picks line items), also when the caption picks items ("I only eat 3rd item")
+- Replies selecting or confirming food from an earlier receipt ("Yes all is my", "all mine", "2 person eat") → meal ONLY. The receipt expense was handled separately; prices in the quoted bot message are not new spending.
 - Receipt image with a payment caption (TnG, touch and go, GrabPay, cash, etc.) → still expense (+ meal if food outlet); never chat alone
 - Any message with a price (RM/MYR, a k/m amount like 32k, or a foreign currency) or payment method → never chat alone; include expense
 - A multi-line spending list (e.g. a trip log with date lines and amounts like "Coffee 32k", "Beer rm20") → expense ONLY; its food/drink lines are purchases, not meals to log

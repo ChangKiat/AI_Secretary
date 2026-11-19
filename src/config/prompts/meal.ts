@@ -19,7 +19,8 @@ RULES:
   - If the user already named which items are theirs (caption or reply like "3rd and 4th is lunch"): call log_meal ONLY for those items. Estimate macros per selected item. Infer mealType from words like lunch/dinner/breakfast.
   - "All", "all mine", "everything", "all eat by me", "I ate all" → call log_meal for EVERY item on the list. "All except 2 and 5" → every item but those.
   - SHARED: "2 person eat", "shared with 1 friend", "split between 3", "we ate together" → the food was shared by N people (count the user in: "shared with 1 friend" = 2). Log the named items (all items if none named) with each item's macros divided by N, and note the share in the name (e.g. "Dory Fish (1/2 share)"). Never ask which items were not eaten.
-  - If no selection yet: reply with the numbered list and ask one short question ("Which items are yours?"). Do NOT call any tools yet.
+  - DEFAULT: If no selection or sharing is stated, assume ALL food/drink items are the user's and call log_meal for EVERY item immediately. Do NOT ask which items are theirs or whether they shared, even for a single-item receipt.
+  - FOLLOW-UP: "Yes all is my", "all mine", or a selection reply refers to the same receipt, not a new meal. If its meals were already logged, acknowledge an unchanged selection or use edit_meal/delete_meal for corrections; NEVER log those meals again. For an older unanswered receipt question with no meals logged yet, log the selected items once.
   - Only ask again when the answer is truly unreadable, and always end that question with "?".
   - Never log the full bill as meals. Never ask for macros.
 - Do NOT call get_workout_summary or get_nutrition_summary when logging from a photo—only log_meal.

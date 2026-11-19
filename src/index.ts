@@ -63,6 +63,7 @@ import {
     SUGGEST_WORKOUT_REQUEST,
 } from './quickLog';
 import { klIsoDate } from './utils/klDate';
+import { isReceiptMealQuestion } from './routing/receiptReply';
 import { linkTelegramByCode } from './services/userService';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
@@ -264,9 +265,6 @@ function getReplyToMessage(ctx: import('telegraf').Context): { text: string; fro
     return undefined;
 }
 
-/** The meal specialist's numbered receipt list (meal prompt: "Which items are yours?"). */
-const RECEIPT_ITEM_LIST = /which items are yours\?/i;
-
 async function buildReplyRecordContext(ctx: import('telegraf').Context): Promise<{
     replyToExpenseId?: number;
     replyTarget?: import('./services/incomeService').ReplyRecordTarget;
@@ -292,7 +290,7 @@ async function buildReplyRecordContext(ctx: import('telegraf').Context): Promise
         // A bot question with no record id (the receipt item list): quote it, so the answer
         // ("all eat by me", "2 person eat") still makes sense to a fresh specialist chat.
         return {
-            replyToReceiptList: RECEIPT_ITEM_LIST.test(replyText),
+            replyToReceiptList: isReceiptMealQuestion(replyText),
             promptHint: `\n[REPLY CONTEXT] User is replying to your earlier message:\n"""\n${replyText}\n"""`,
         };
     }

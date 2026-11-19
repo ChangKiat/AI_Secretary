@@ -79,8 +79,9 @@ assert(
 const mealDomainPrompt = buildDomainInstruction('meal', getExpenseCategoryNames());
 assert(
     mealDomainPrompt.includes('RESTAURANT RECEIPT') &&
-        mealDomainPrompt.includes('Which items are yours?'),
-    'meal prompt must support receipt item selection'
+        mealDomainPrompt.includes('assume ALL food/drink items') &&
+        mealDomainPrompt.includes('EVERY item immediately'),
+    'meal prompt must log all receipt items by default'
 );
 assert(
     mealDomainPrompt.includes('all eat by me') && mealDomainPrompt.includes('2 person eat'),
