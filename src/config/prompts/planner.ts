@@ -8,15 +8,21 @@ Domains:
 - workout: gym, exercises, training, sets/reps/weight, workout history, daily step counts, calories burned (workouts + steps + BMR)
 - chat: general conversation with no tool action needed
 
+ROUTING PRIORITY:
+1. Explicit reply record context determines the owner of a correction or confirmation.
+2. Food selection for an earlier receipt is meal-only; quoted prices are history, not new spending.
+3. Setup requests belong to financeConfig; future plans are not completed meals or workouts.
+4. Route each new action to its owner. Price/payment hints apply to new financial actions, not quoted history or unrelated corrections.
+
 Multi-domain examples:
 - Food with stated price ("rm 9.9 chicken rice", "spent 12 on lunch", "chinese kopi with kaya ball RM13 TNG") → expense AND meal (never chat)
 - A message about fixed bills, interest schedules, or budgets → financeConfig ONLY, even if it mentions an amount (it is setup, not a logged transaction; do not also add expense)
 - Pure food log with no price ("had nasi lemak", "2 pcs roti") → meal only
 - Nutrition progress ("how much protein today", "macro summary") → meal only (not expense)
-- Restaurant / food-outlet receipt image → expense AND meal (expense logs bill total; meal picks line items), also when the caption picks items ("I only eat 3rd item")
+- Restaurant / food-outlet receipt image → expense AND meal (expense logs bill total; meal logs all food by default unless selection/sharing is stated), also when the caption picks items ("I only eat 3rd item")
 - Replies selecting or confirming food from an earlier receipt ("Yes all is my", "all mine", "2 person eat") → meal ONLY. The receipt expense was handled separately; prices in the quoted bot message are not new spending.
 - Receipt image with a payment caption (TnG, touch and go, GrabPay, cash, etc.) → still expense (+ meal if food outlet); never chat alone
-- Any message with a price (RM/MYR, a k/m amount like 32k, or a foreign currency) or payment method → never chat alone; include expense
+- A new financial action with a price (RM/MYR, a k/m amount like 32k, or a foreign currency) or payment method → never chat alone; include expense
 - A multi-line spending list (e.g. a trip log with date lines and amounts like "Coffee 32k", "Beer rm20") → expense ONLY; its food/drink lines are purchases, not meals to log
 - Currency exchange or a new trip ("exchanged RM500 to 2.7m VND", "money changer 300 ringgit to baht", "create trip Bali 1-5 Nov, IDR") → expense ONLY (a trip is not a recurring rule, so never financeConfig)
 - Trip spending totals ("how much did I spend in Vietnam?", "Danang trip summary") → expense only

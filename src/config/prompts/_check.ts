@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import * as ts from 'typescript';
 import { SchemaType } from '@google/generative-ai';
 import { buildPlannerInstruction, buildDomainInstruction, SpecialistDomain } from './index';
-import { basePrompt } from './base';
+import { basePrompt, financialDashboardPrompt } from './base';
 import { getDomainDeclarations, getPlannerDeclarations, routeRequestDeclaration } from '../../tools/tools';
 import { getExpenseCategoryNames } from '../expenseCategories';
 import { routeByHeuristics } from '../../routing/router';
@@ -196,22 +196,25 @@ assert(
     'workout prompt must reply with both labelled burn figures and the BMR hint'
 );
 
-// 3.13: Dashboard-only features are named in every specialist's base rules, the capabilities rule
-// defers to them, and nothing Telegram now has a tool for is listed as Dashboard-only.
-const dashboardOnlyRule = basePrompt.split('\n').find((line) => line.startsWith('6. DASHBOARD-ONLY')) ?? '';
-assert(
-    dashboardOnlyRule.includes('car service') && dashboardOnlyRule.includes('FD') && dashboardOnlyRule.includes('loan terms'),
-    'base prompt rule 6 must list the Dashboard-only features'
-);
-assert(
-    /NEVER claim you lack access to anything your tools cover\. The only exception is rule 6/.test(basePrompt),
-    'base prompt CAPABILITIES rule must defer to the DASHBOARD-ONLY rule'
-);
-for (const supported of ['unit trust', 'exchange', 'create', 'step', 'budget', 'fixed bill', 'transfer fee', 'interest schedule', 'weight']) {
-    assert(
-        !dashboardOnlyRule.toLowerCase().includes(supported),
-        `base prompt rule 6 must not list "${supported}" as Dashboard-only: Telegram has a tool for it`
-    );
+// Financial restrictions belong only to financial specialists.
+assert(basePrompt.includes('An unchanged confirmation needs no write'), 'base must separate confirmation from writes');
+assert(basePrompt.includes('For undated current activity, use today'), 'base must define current-date defaults');
+assert(financialDashboardPrompt.includes('loan terms') && financialDashboardPrompt.includes('car service'), 'financial restrictions must preserve unsupported features');
+for (const domain of ['meal', 'calendar', 'workout'] as const) {
+    assert(!buildDomainInstruction(domain, []).includes('DASHBOARD-ONLY:'), `${domain} must not inherit financial restrictions`);
+}
+for (const domain of ['expense', 'financeConfig'] as const) {
+    assert(buildDomainInstruction(domain, []).includes(financialDashboardPrompt), `${domain} must retain financial restrictions`);
+}
+assert(expensePrompt.includes('EDITS OR DELETIONS'), 'record-id requirement must be limited to modifications');
+assert(expensePrompt.includes('initial receipt submission'), 'receipt expense creation must apply to initial submission');
+assert(mealDomainPrompt.includes('do not guess N'), 'sharing without a count must ask');
+assert(mealDomainPrompt.includes('If logging status is unknown, use get_meal_history'), 'unknown follow-up state must be checked');
+assert(!mealDomainPrompt.includes('call log_meal for EVERY item on the list'), 'all-mine selection must not unconditionally create meals');
+for (const name of ['log_expense', 'log_bulk_expenses']) {
+    const schema = JSON.stringify(declarationOf('expense', name));
+    assert(!schema.includes('NEVER use the current system date'), `${name} must allow today for current spending`);
+    assert(schema.includes('historical'), `${name} must protect historical dates`);
 }
 const financeConfigPrompt = buildDomainInstruction('financeConfig', getExpenseCategoryNames());
 assert(

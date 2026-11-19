@@ -40,7 +40,7 @@ function buildLogExpenseDeclaration(): FunctionDeclaration {
                 date: {
                     type: SchemaType.STRING,
                     description:
-                        'Format: YYYY-MM-DD. MUST be the exact date the transaction occurred. Look at the receipt date to determine the correct year. NEVER use the current system date.',
+                        'YYYY-MM-DD. Use the user\'s explicit transaction date, otherwise the receipt date. Resolve relative dates from SYSTEM CONTEXT. For undated current spending use today; never replace a historical date with today.',
                 },
                 reimbursements: {
                     type: SchemaType.ARRAY,
@@ -308,7 +308,7 @@ function buildLogBulkExpensesDeclaration(): FunctionDeclaration {
                             date: {
                                 type: SchemaType.STRING,
                                 description:
-                                    "Format: YYYY-MM-DD. MUST be the exact date the transaction occurred. Look at the statement's billing period or statement date to determine the correct year. NEVER use the current system date.",
+                                    "YYYY-MM-DD. Use each transaction's date; infer its year from the statement billing period/date or an explicit user date. For typed lists respect date headers. Use today only for undated current spending, never for historical transactions.",
                             },
                             paymentMethod: {
                                 type: SchemaType.STRING,
@@ -710,7 +710,7 @@ export const logWorkoutDeclaration: FunctionDeclaration = {
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
-            date: { type: SchemaType.STRING, description: 'YYYY-MM-DD. Use receipt/context date, not today unless specified.' },
+            date: { type: SchemaType.STRING, description: 'YYYY-MM-DD. Use the stated workout date, resolving relative dates from SYSTEM CONTEXT; default to today for undated current activity. Preserve historical dates.' },
             exercise: { type: SchemaType.STRING, description: 'Exercise name e.g. Bench Press, Squat.' },
             sets: { type: SchemaType.NUMBER, description: 'Number of sets. Inferred from weightsKg length when omitted.' },
             reps: { type: SchemaType.NUMBER, description: 'Reps per set (same across progressive sets).' },

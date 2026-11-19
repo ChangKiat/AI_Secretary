@@ -248,8 +248,8 @@ function buildContextPrompt(userMessage: string): string {
     return `
         [SYSTEM CONTEXT]
         Today is ${todayFormatted} (${klIsoDate()}). Yesterday was ${klIsoDate(-1)}.
-        Current Year: ${now.getFullYear()}.
-        Current Month: ${now.getMonth() + 1}.
+        Current Year: ${klIsoDate().slice(0, 4)}.
+        Current Month: ${Number(klIsoDate().slice(5, 7))}.
         Reference: If the user provides a date range like "24-26", calculate the start and end dates accordingly.
         MIXED DAYS: A message may have sections for different days ("Yesterday workout … Today lunch …"). Each section's day applies only to the items under it—pass that exact date on every log call; never default a "yesterday" item to today.
         ACTION: Use the appropriate tool for finances, calendar, gym, or nutrition. DO NOT JUST CHAT when an action is requested.

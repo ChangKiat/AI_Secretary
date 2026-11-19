@@ -1,4 +1,4 @@
-import { basePrompt } from './base';
+import { basePrompt, financialDashboardPrompt } from './base';
 import { plannerPrompt } from './planner';
 import { buildExpensePrompt, documentExpensePrompt } from './expense';
 import { buildFinanceConfigPrompt } from './financeConfig';
@@ -37,5 +37,7 @@ export function buildDomainInstruction(
                 : domain === 'calendar'
                   ? calendarPrompt
                   : workoutPrompt;
-    return `${basePrompt}\n\n${domainPart}`;
+    const financialRules = domain === 'expense' || domain === 'financeConfig'
+        ? `\n\n${financialDashboardPrompt}` : '';
+    return `${basePrompt}${financialRules}\n\n${domainPart}`;
 }
