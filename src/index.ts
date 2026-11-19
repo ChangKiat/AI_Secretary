@@ -67,6 +67,9 @@ import { isReceiptMealQuestion } from './routing/receiptReply';
 import { requireDb } from './db/client';
 import { createMessageClaimStore, checkMessageClaimSchema } from './services/messageClaimStore';
 import { runMessageOnce, runToolWithoutReplay, hasAttemptedTool, INTERRUPTED_MESSAGE_REPLY } from './services/messageDedup';
+import { createReceiptStore, checkReceiptSchema } from './services/receiptStore';
+import { receiptContext, receiptPromptHint, isReceiptFoodSelection } from './services/receiptContext';
+import { withReceiptTracking } from './receiptTracking';
 import { linkTelegramByCode } from './services/userService';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
@@ -161,7 +164,7 @@ bot.use(async (ctx, next) => {
         botId: ctx.botInfo.id,
         chatId: ctx.chat.id,
         messageId: ctx.message.message_id,
-    }, next);
+    }, () => withReceiptTracking(ctx, next, createReceiptStore(requireDb())));
     if (outcome === 'duplicate') {
         console.log(`Skipped repeated Telegram message ${ctx.chat.id}/${ctx.message.message_id}`);
     }
@@ -215,6 +218,7 @@ bot.command('settargets', async (ctx) => {
 
 async function main() {
     await checkMessageClaimSchema(requireDb());
+    await checkReceiptSchema(requireDb());
     await loadExpenseCategories();
     await loadPaymentAccounts();
     buildModels();
@@ -544,11 +548,15 @@ async function routeAndExecute(
         SESSION_TTL_MS
     );
     const replyCtx = await buildReplyRecordContext(ctx);
-    const contextPrompt = buildContextPrompt(textForContext) + replyCtx.promptHint;
+    const trackedReceipt = receiptContext.getStore();
+    const receiptFoodReply = trackedReceipt?.followup && isReceiptFoodSelection(textForContext);
+    const contextPrompt = buildContextPrompt(textForContext) +
+        (receiptFoodReply ? '\n[REPLY CONTEXT] Food selection for the persisted receipt; not an expense correction.' : replyCtx.promptHint) +
+        receiptPromptHint();
     const mergedToolOptions: import('./tools/toolHandler').ToolCallOptions = {
         ...toolOptions,
-        replyToExpenseId: replyCtx.replyToExpenseId,
-        replyTarget: replyCtx.replyTarget,
+        replyToExpenseId: receiptFoodReply ? undefined : replyCtx.replyToExpenseId,
+        replyTarget: receiptFoodReply ? undefined : replyCtx.replyTarget,
     };
 
     // A pinned (awaiting-input) session catches bare answers, but a message whose keywords
@@ -569,6 +577,8 @@ async function routeAndExecute(
     let domains: import('./routing/router').RouteDomain[];
     if (options?.forceDomains) {
         domains = options.forceDomains;
+    } else if (receiptFoodReply) {
+        domains = ['meal'];
     } else if (replyCtx.replyTarget) {
         // Replying to a confirmation ("edit date to yesterday") carries no keywords
         // for the router—the record type alone says who owns the correction.
@@ -633,6 +643,20 @@ async function routeAndExecute(
     // Active unit trust names for invest_in_fund / withdraw_from_fund (expense) and add_fixed_expense (financeConfig).
     const holdingsHints = await buildHoldingsContextHints(specialists);
 
+    // Routing sees only the follow-up text and saved context: reattaching the original
+    // image must not turn it into a new expense+meal media submission.
+    let specialistMedia = mediaParts;
+    if (trackedReceipt?.followup &&
+        specialists.some(domain => domain === 'meal' || domain === 'expense')) {
+        try {
+            const buffer = await fetchTelegramFile(trackedReceipt.receipt.fileId);
+            specialistMedia = [...mediaParts, await buildFilePart(buffer, trackedReceipt.receipt.mimeType)];
+        } catch (error) {
+            console.warn('Original receipt media unavailable; using saved record context', error);
+            specialistMedia = [...mediaParts, '[Original receipt media unavailable. Use saved records; ask if item numbers or missing items cannot be identified.]'];
+        }
+    }
+
     // Each specialist has its own chat session and replies independently, so run
     // them concurrently — a food-photo turn (expense + meal) costs one turn of
     // latency instead of two. Reply order between domains is no longer guaranteed.
@@ -642,7 +666,9 @@ async function routeAndExecute(
         const domainPrompt =
             (domain === 'expense' ? contextPrompt + tripHint : contextPrompt) + (holdingsHints[domain] ?? '');
         const specialistParts =
-            mediaParts.length > 0 ? [...mediaParts, domainPrompt] : domainPrompt;
+            specialistMedia.length > 0 && (domain === 'meal' || domain === 'expense')
+                ? [...specialistMedia, domainPrompt]
+                : mediaParts.length > 0 ? [...mediaParts, domainPrompt] : domainPrompt;
         const heavy = options?.heavy && domain === 'expense';
         const domainToolOptions =
             domain === 'expense' && suppressExpenseNoOp

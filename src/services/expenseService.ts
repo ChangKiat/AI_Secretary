@@ -1,5 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { requireDb } from '../db/client';
+import { currentReceiptId } from './receiptContext';
 import { expenses, fixedExpenses, investmentEvents } from '../db/schema';
 import { getExpenseCategories, resolveCategory } from '../config/expenseCategories';
 import {
@@ -227,6 +228,7 @@ export async function appendExpense(
     const [row] = await db
         .insert(expenses)
         .values({
+            receiptId: currentReceiptId(),
             date: formatDateForDb(date),
             amount: String(amount),
             currency: currency || 'MYR',

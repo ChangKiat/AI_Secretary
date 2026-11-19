@@ -9,6 +9,7 @@ Domains:
 - chat: general conversation with no tool action needed
 
 ROUTING PRIORITY:
+- PERSISTED RECEIPT CONTEXT describes an earlier upload and its current records. Route the current follow-up, not the old caption as a new action. Food selection/sharing belongs to meal even when replying to an expense confirmation; payment corrections and reimbursements belong to expense.
 1. Explicit reply record context determines the owner of a correction or confirmation.
 2. Food selection for an earlier receipt is meal-only; quoted prices are history, not new spending.
 3. Setup requests belong to financeConfig; future plans are not completed meals or workouts.

@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { eq, and, gte, lte, desc } from 'drizzle-orm';
 import { requireDb } from '../db/client';
 import { meals, userSettings } from '../db/schema';
+import { currentReceiptId } from './receiptContext';
 
 const DEFAULT_PROTEIN_TARGET = parseFloat(
     process.env.DEFAULT_PROTEIN_TARGET_G || '150'
@@ -217,6 +218,7 @@ export async function logMeal(
     const [row] = await db
         .insert(meals)
         .values({
+            receiptId: currentReceiptId(),
             telegramUserId,
             date,
             mealType: mealType ?? null,

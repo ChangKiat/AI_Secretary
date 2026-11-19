@@ -1,4 +1,5 @@
 import { Context } from 'telegraf';
+import { receiptContext } from '../services/receiptContext';
 import { randomUUID } from 'crypto';
 import type { ChatSession, FunctionCall } from '../config/ai';
 import { resolveCategory, upsertBudget, getBudgets } from '../config/expenseCategories';
@@ -533,6 +534,17 @@ export async function handleToolCall(
     const resolvedName = resolveToolName(rawName);
     if (resolvedName !== rawName && KNOWN_TOOL_NAMES.has(resolvedName)) {
         (call as { name: string }).name = resolvedName;
+    }
+
+    const receipt = receiptContext.getStore();
+    if (receipt?.followup && receipt.receipt.expenses.length > 0 &&
+        (call.name === 'log_expense' || call.name === 'log_bulk_expenses')) {
+        const ids = receipt.receipt.expenses.map(e => `#${e.id}`).join(', ');
+        await chat.sendMessage([{ functionResponse: { name: call.name,
+            response: { status: 'already_logged', expenses: receipt.receipt.expenses,
+                instruction: 'Use edit_expense for corrections. This receipt must not be logged again.' } } }]);
+        await ctx.reply(`This receipt is already logged as expense ${ids}. No new expense was added. Reply with the correction you want to make.`);
+        return 'complete';
     }
 
     if (call.name === 'log_expense') {

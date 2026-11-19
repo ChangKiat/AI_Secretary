@@ -9,6 +9,25 @@ export const telegramMessageClaims = pgTable('telegram_message_claims', {
     finishedAt: timestamp('finished_at', { withTimezone: true }),
 }, (table) => [primaryKey({ columns: [table.botId, table.chatId, table.messageId] })]);
 
+export const telegramReceipts = pgTable('telegram_receipts', {
+    id: serial('id').primaryKey(),
+    botId: bigint('bot_id', { mode: 'number' }).notNull(),
+    chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+    telegramUserId: bigint('telegram_user_id', { mode: 'number' }).notNull(),
+    messageId: bigint('message_id', { mode: 'number' }).notNull(),
+    caption: text('caption').default('').notNull(),
+    fileId: text('file_id').notNull(),
+    mimeType: text('mime_type').notNull(),
+    sentAt: text('sent_at').notNull(),
+}, (t) => [unique().on(t.botId, t.chatId, t.messageId)]);
+
+export const telegramReceiptMessages = pgTable('telegram_receipt_messages', {
+    botId: bigint('bot_id', { mode: 'number' }).notNull(),
+    chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+    messageId: bigint('message_id', { mode: 'number' }).notNull(),
+    receiptId: integer('receipt_id').notNull().references(() => telegramReceipts.id),
+}, (t) => [primaryKey({ columns: [t.botId, t.chatId, t.messageId] })]);
+
 export const trips = pgTable('trips', {
     id: serial('id').primaryKey(),
     userId: integer('user_id').references(() => users.id),
@@ -22,6 +41,7 @@ export const trips = pgTable('trips', {
 
 export const expenses = pgTable('expenses', {
     id: serial('id').primaryKey(),
+    receiptId: integer('receipt_id').references(() => telegramReceipts.id),
     userId: integer('user_id').references(() => users.id),
     date: text('date').notNull(),
     amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
@@ -161,6 +181,7 @@ export const workouts = pgTable('workouts', {
 
 export const meals = pgTable('meals', {
     id: serial('id').primaryKey(),
+    receiptId: integer('receipt_id').references(() => telegramReceipts.id),
     userId: integer('user_id').references(() => users.id),
     telegramUserId: bigint('telegram_user_id', { mode: 'number' }).notNull(),
     date: text('date').notNull(),

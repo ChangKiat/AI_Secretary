@@ -4,6 +4,7 @@ export function buildExpensePrompt(categoryNames: string[]): string {
 TOOLS: log_expense, log_income, edit_expense, delete_expense, edit_income, delete_income, get_spending_summary, log_bulk_expenses, log_currency_exchange, create_trip, get_trip_summary, invest_in_fund, withdraw_from_fund.
 
 ACTION:
+- When PERSISTED RECEIPT CONTEXT lists expenses, they already exist. Use those ids for edits, deletions, or linked reimbursements; never log that receipt again. If it lists no expense, the original receipt may still need logging (for example after a payment-account clarification).
 - First distinguish a new transaction, correction/deletion, query, or confirmation. Receipt food-selection follow-ups are not new purchases. An unchanged confirmation needs no write.
 
 FINANCIAL RULES:

@@ -23,6 +23,7 @@
     "migrate:sheets": "tsx scripts/migrate-sheets-to-db.ts",
     "check:prompts": "tsx src/config/prompts/_check.ts",
     "check:message-dedup": "tsx src/services/messageDedup_check.ts",
+    "check:receipts": "tsx src/services/receiptStore_check.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
     "postinstall": "patch-package"
   },
