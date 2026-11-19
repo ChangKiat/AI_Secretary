@@ -76,6 +76,13 @@ Back up first (Supabase → Database → Backups, or `pg_dump`). Check which col
 25. `migrate-daily-activity.sql`: `user_settings.height_cm/age/sex` and `daily_activity_logs`.
 26. `migrate-fx-rate-precision.sql`: widens `expenses.fx_rate` to `numeric(20,12)`. Needs 17. **Run it manually before deploying** any build whose `schema.ts` declares the wider `fx_rate`.
 27. `migrate-scheduled-job-runs.sql`: `scheduled_job_runs`, the Dashboard scheduler's record of which days each daily job ran. Run it before deploying a Dashboard with `SCHEDULER_ENABLED=1`.
+28. `migrate-telegram-message-claims.sql`: persistent Telegram message admission claims. **Run before deploying the bot**; startup checks for this table. Safe to run twice.
+
+Telegram duplicate protection uses `(bot_id, chat_id, message_id)`, not purchase text, amounts, or image hashes. Concurrent deliveries and deliveries after restart execute at most once. A new message is a separate request even if its content is identical. It does not deduplicate manually re-sent receipts or link meal-selection replies to earlier receipts.
+
+Claims never expire automatically. `handled` means the message handler finished (including a handled error), not that every operation succeeded. A `processing` or `failed` claim can represent an interrupted, partially saved message: do not delete it or replay it automatically. Check confirmations and Dashboard records, then send only missing items as a new message. Model fallback is allowed before tool execution, but blocked once a tool has started because its write may already have committed. This is at-most-once execution, not an atomic transaction across every action in a message.
+
+Run `npm run check:message-dedup` with the local development PostgreSQL on port 5433. The test uses an isolated temporary schema, never `DATABASE_URL` or production data.
 
 The Dashboard repo keeps one optional personal seed, `Dashboard/scripts/seed-car-service-visits.sql`. Run it once, after 23; a re-run skips visits that already exist.
 

@@ -64,6 +64,9 @@ import {
 } from './quickLog';
 import { klIsoDate } from './utils/klDate';
 import { isReceiptMealQuestion } from './routing/receiptReply';
+import { requireDb } from './db/client';
+import { createMessageClaimStore, checkMessageClaimSchema } from './services/messageClaimStore';
+import { runMessageOnce, runToolWithoutReplay, hasAttemptedTool, INTERRUPTED_MESSAGE_REPLY } from './services/messageDedup';
 import { linkTelegramByCode } from './services/userService';
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
@@ -153,7 +156,15 @@ bot.use(async (ctx, next) => {
     }
     // Pick up accounts/categories edited on the Dashboard (reloads at most once a minute; never throws).
     await refreshFinanceCaches();
-    return next();
+    if (!ctx.message || !ctx.chat) return next();
+    const outcome = await runMessageOnce(createMessageClaimStore(requireDb()), {
+        botId: ctx.botInfo.id,
+        chatId: ctx.chat.id,
+        messageId: ctx.message.message_id,
+    }, next);
+    if (outcome === 'duplicate') {
+        console.log(`Skipped repeated Telegram message ${ctx.chat.id}/${ctx.message.message_id}`);
+    }
 });
 
 bot.start(async (ctx) => {
@@ -203,6 +214,7 @@ bot.command('settargets', async (ctx) => {
 });
 
 async function main() {
+    await checkMessageClaimSchema(requireDb());
     await loadExpenseCategories();
     await loadPaymentAccounts();
     buildModels();
@@ -405,7 +417,7 @@ async function runChatTurn(
                 callOptions.expenseBatchCollector = expenseBatchCollector;
                 callOptions.expenseSkipCollector = expenseSkipCollector;
             }
-            const toolResult = await handleToolCall(call, turnChat, ctx, callOptions);
+            const toolResult = await runToolWithoutReplay(ctx, () => handleToolCall(call, turnChat, ctx, callOptions));
             if (toolResult === 'awaiting_input') {
                 awaiting = true;
             }
@@ -647,7 +659,7 @@ async function routeAndExecute(
                 heavy
             );
         } catch (error) {
-            if (!isRetryableAiError(error)) throw error;
+            if (!isRetryableAiError(error) || hasAttemptedTool(ctx)) throw error;
             console.log(
                 `🧭 ${domain} (${heavy ? 'heavy' : 'lite'}) overloaded — retrying with ${heavy ? 'lite' : 'heavy'} model`
             );
@@ -705,6 +717,10 @@ bot.on(message('text'), async (ctx) => {
         await routeAndExecute(ctx, userId, userMessage);
     } catch (error: unknown) {
         console.error('Error:', error);
+        if (hasAttemptedTool(ctx)) {
+            await ctx.reply(INTERRUPTED_MESSAGE_REPLY);
+            return;
+        }
         if (isRetryableAiError(error)) {
             await ctx.reply(
                 '⏳ The AI service is overloaded right now (tried both models and it\'s still down). Please try again in a bit.'
@@ -735,6 +751,10 @@ bot.on(message('photo'), async (ctx) => {
         });
     } catch (error) {
         console.error('Error processing image:', error);
+        if (hasAttemptedTool(ctx)) {
+            await ctx.reply(INTERRUPTED_MESSAGE_REPLY);
+            return;
+        }
         if (isRetryableAiError(error)) {
             await ctx.reply(
                 '⏳ The AI service is busy right now. Please try sending the image again in a moment.'
@@ -774,6 +794,10 @@ bot.on(message('voice'), async (ctx) => {
         });
     } catch (error) {
         console.error('Error processing voice:', error);
+        if (hasAttemptedTool(ctx)) {
+            await ctx.reply(INTERRUPTED_MESSAGE_REPLY);
+            return;
+        }
         if (isRetryableAiError(error)) {
             await ctx.reply(
                 '⏳ The AI service is overloaded right now. Please try sending the voice message again in a bit.'
@@ -820,7 +844,7 @@ bot.on(message('document'), async (ctx) => {
                     }
                 );
             } catch (error) {
-                if (isRetryableAiError(error)) {
+                if (isRetryableAiError(error) && !hasAttemptedTool(ctx)) {
                     const fallbackChat = createDomainModel('expense').startChat();
                     await runChatTurn(
                         fallbackChat,
@@ -847,6 +871,10 @@ bot.on(message('document'), async (ctx) => {
         });
     } catch (error) {
         console.error('Error processing document:', error);
+        if (hasAttemptedTool(ctx)) {
+            await ctx.reply(INTERRUPTED_MESSAGE_REPLY);
+            return;
+        }
         if (isRetryableAiError(error)) {
             await ctx.reply(
                 '⏳ The AI service is overloaded right now (tried both models and it\'s still down). Please try again in a bit.'

@@ -1,4 +1,13 @@
-import { pgTable, serial, text, numeric, integer, boolean, timestamp, bigint, jsonb, unique } from 'drizzle-orm/pg-core';
+import { pgTable, serial, text, numeric, integer, boolean, timestamp, bigint, jsonb, unique, primaryKey } from 'drizzle-orm/pg-core';
+
+export const telegramMessageClaims = pgTable('telegram_message_claims', {
+    botId: bigint('bot_id', { mode: 'number' }).notNull(),
+    chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+    messageId: bigint('message_id', { mode: 'number' }).notNull(),
+    status: text('status').default('processing').notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+}, (table) => [primaryKey({ columns: [table.botId, table.chatId, table.messageId] })]);
 
 export const trips = pgTable('trips', {
     id: serial('id').primaryKey(),

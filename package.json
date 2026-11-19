@@ -22,6 +22,7 @@
     "db:push:UNSAFE": "echo Refusing: never push to the shared DB. Use scripts/init-db.sql + scripts/migrate-*.sql && exit 1",
     "migrate:sheets": "tsx scripts/migrate-sheets-to-db.ts",
     "check:prompts": "tsx src/config/prompts/_check.ts",
+    "check:message-dedup": "tsx src/services/messageDedup_check.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
     "postinstall": "patch-package"
   },
