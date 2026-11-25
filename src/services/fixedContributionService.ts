@@ -9,7 +9,7 @@ import {
     isFixedContributionRecorded,
     type BillContributionBuy,
 } from './expenseService';
-import { dueDateInMonth, isFrequencyDue, lastDayOfMonth } from './fixedSchedule';
+import { dueDateInMonth, isMonthlyExpenseDue, lastDayOfMonth } from './fixedSchedule';
 import { upsertInvestmentFundingTransfer, validateIncomePaymentAccounts } from './incomeService';
 import { getInstrumentById, recordFundInvest } from './investmentPortfolioService';
 import { getPaymentAccountById, type PaymentAccount } from './paymentAccountService';
@@ -194,7 +194,7 @@ export async function contributeDueFixedExpenses(): Promise<{
     for (const row of rows) {
         if (row.instrumentId == null) continue;
         if (resolveCategory(row.category).toLowerCase() !== 'investment') continue;
-        if (!isFrequencyDue(row.startMonth, row.frequencyMonths, month)) continue;
+        if (!isMonthlyExpenseDue(row, year, month)) continue;
         const dueDay = Math.min(row.dayOfMonth, lastDayOfMonth(year, month));
         if (todayDay < dueDay) continue;
 

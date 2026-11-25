@@ -11,7 +11,7 @@ import {
     setPaymentAccountsCache,
 } from '../config/paymentMethods';
 import { getReimbursementsByExpenseIds, getUnlinkedIncomeTotal, deleteIncomesByExpenseId, getTransferFeesForSpendingSummary } from './incomeService';
-import { isFrequencyDue, isIntervalDue, lastDayOfMonth } from './fixedSchedule';
+import { isMonthlyExpenseDue, isIntervalDue, lastDayOfMonth } from './fixedSchedule';
 import type { PaymentAccount } from './paymentAccountService';
 import {
     computeInstallmentSplit,
@@ -540,7 +540,7 @@ export async function addFixedExpense(
     loan?: FixedExpenseLoanFields | null,
     instrumentId?: number | null,
     /** Repeat every `days` days from `startDate` instead of on `dayOfMonth`. */
-    interval?: { days: number; startDate: string } | null
+    interval?: { days: number | null; startDate: string } | null
 ) {
     const db = requireDb();
     const resolvedCategory = resolveCategory(category);
@@ -674,7 +674,7 @@ function isFixedExpenseDueOn(
         return isIntervalDue(row.intervalStartDate, row.intervalDays, date);
     }
     if (day !== Math.min(row.dayOfMonth, lastDayOfMonth(year, month))) return false;
-    return isFrequencyDue(row.startMonth, row.frequencyMonths, month);
+    return isMonthlyExpenseDue(row, year, month);
 }
 
 /**
@@ -942,8 +942,9 @@ export async function updateFixedExpenseById(
         set.intervalDays = fields.intervalDays;
         if (fields.intervalDays == null) set.intervalStartDate = null;
     }
-    if (fields.intervalStartDate != null && fields.intervalDays !== null) {
+    if (fields.intervalStartDate != null) {
         set.intervalStartDate = fields.intervalStartDate;
+        if (fields.intervalDays === null) set.startMonth = Number(fields.intervalStartDate.slice(5, 7));
     }
 
     const guardsPayment = fields.paymentMethod !== undefined;
@@ -1111,6 +1112,10 @@ if (require.main === module) {
     expectEq(isFixedExpenseDueOn(bill(31, 1, 3), 2026, 6, 30), false, 'quarterly day 31 not due in Jun');
 
     // Every-N-days bill: the day of month is ignored.
+    const movedBill = { ...bill(31, 12, 3), intervalStartDate: '2027-03-31' };
+    expectEq(isFixedExpenseDueOn(movedBill, 2026, 12, 31), false, 'skip quarter before chosen date');
+    expectEq(isFixedExpenseDueOn(movedBill, 2027, 3, 31), true, 'due on chosen date');
+    expectEq(isFixedExpenseDueOn(movedBill, 2027, 6, 30), true, 'next quarter clamps to month end');
     const pass = { ...bill(11), intervalDays: 30, intervalStartDate: '2026-11-11' };
     expectEq(isFixedExpenseDueOn(pass, 2026, 11, 11), true, '30-day pass due on its start date');
     expectEq(isFixedExpenseDueOn(pass, 2026, 12, 11), true, '30-day pass due 30 days later');

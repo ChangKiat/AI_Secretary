@@ -22,6 +22,18 @@ export function isFrequencyDue(startMonth: number, frequencyMonths: number, curr
     return ((monthDiff % freq) + freq) % freq === 0;
 }
 
+/** Monthly bills with a chosen payment date count calendar months forward from that date. */
+export function isMonthlyExpenseDue(
+    row: { startMonth: number; frequencyMonths: number; intervalStartDate?: string | null },
+    year: number,
+    month: number
+): boolean {
+    if (!row.intervalStartDate) return isFrequencyDue(row.startMonth, row.frequencyMonths, month);
+    const [startYear, startMonth] = row.intervalStartDate.split('-').map(Number);
+    const elapsed = (year - startYear) * 12 + month - startMonth;
+    return elapsed >= 0 && elapsed % (row.frequencyMonths || 1) === 0;
+}
+
 /** Whole days from `from` to `to` (both YYYY-MM-DD); negative when `to` is the earlier date. */
 export function daysBetween(from: string, to: string): number {
     const utc = (iso: string) => {
@@ -55,7 +67,7 @@ export function nextIntervalDueDate(startDate: string, intervalDays: number, fro
 }
 
 // ponytail self-check: pure date math, no DB
-if (require.main === module) {
+if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.main === module) {
     const eq = (actual: unknown, expected: unknown, label: string) => {
         if (actual !== expected) throw new Error(`${label}: expected ${expected}, got ${actual}`);
     };
