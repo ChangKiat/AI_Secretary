@@ -295,8 +295,9 @@ export const investmentLots = pgTable('investment_lots', {
 export const carServiceVisits = pgTable('car_service_visits', {
     id: serial('id').primaryKey(),
     userId: integer('user_id').references(() => users.id),
+    visitType: text('visit_type', { enum: ['Normal service', 'Accessory repair'] }).notNull().default('Normal service'),
     date: text('date').notNull(),
-    odometerKm: integer('odometer_km').notNull(),
+    odometerKm: integer('odometer_km'),
     notes: text('notes'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });

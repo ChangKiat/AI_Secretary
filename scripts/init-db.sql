@@ -273,8 +273,10 @@ CREATE TABLE IF NOT EXISTS daily_activity_logs (
 -- Car service log (Dashboard Car tab)
 CREATE TABLE IF NOT EXISTS car_service_visits (
     id SERIAL PRIMARY KEY,
+    visit_type TEXT NOT NULL DEFAULT 'Normal service' CHECK (visit_type IN ('Normal service', 'Accessory repair')),
     date TEXT NOT NULL,
-    odometer_km INTEGER NOT NULL,
+    odometer_km INTEGER,
+    CONSTRAINT car_service_requires_odometer CHECK (visit_type = 'Accessory repair' OR odometer_km IS NOT NULL),
     notes TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );

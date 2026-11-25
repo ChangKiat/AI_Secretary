@@ -79,6 +79,9 @@ Back up first (Supabase → Database → Backups, or `pg_dump`). Check which col
 28. `migrate-telegram-message-claims.sql`: persistent Telegram message admission claims. **Run before deploying the bot**; startup checks for this table. Safe to run twice.
 29. `migrate-telegram-receipts.sql`: persistent upload/reply mappings and `receipt_id` links on expenses/meals. **Run before deploying the bot**; safe to rerun. Existing records are not guessed or backfilled.
 
+30. `migrate-car-service-visit-type.sql` adds the visit type used by the Dashboard Car tab. Existing visits default to normal service. Requires migration 23.
+31. `migrate-car-repair-odometer.sql` allows accessory repairs without a mileage reading. Requires migration 30.
+
 Receipt follow-ups: reply to the original upload or any of the bot's responses for that upload. The bot reloads linked expense/meal rows and the original image/PDF after restart. Meal-selection replies to an expense confirmation go to meal; payment edits still go to expense. Links are scoped to bot, chat, and sender. New uploads create new receipt contexts; unrelated messages without an explicit reply do not guess a receipt. Original Telegram file references and captions are stored server-side (including non-receipt media, since classification happens later). Edits/deletions are reflected on the next follow-up. No duplicate expense is created by a follow-up when an expense is already linked. If the original file cannot be downloaded, the bot uses saved rows and asks when the requested item cannot be identified.
 
 Run `npm run check:receipts` against local development PostgreSQL on port 5433 to check durable receipt links, owner isolation, current record state, and concurrent request contexts. Production data is never used.
