@@ -364,6 +364,12 @@ export async function getPaymentAccountById(id: number): Promise<PaymentAccount 
     return rows.length > 0 ? mapRow(rows[0]) : null;
 }
 
+export class PaymentAccountNameConflictError extends Error {
+    constructor() {
+        super('An account with this name already exists.');
+    }
+}
+
 export async function createPaymentAccount(
     name: string,
     accountType: PaymentAccountType,
@@ -392,20 +398,27 @@ export async function createPaymentAccount(
             ? fields.rebateConfig
             : null;
 
+    const settings = { active: true, creditLimit, statementDay, rebateConfig };
     const [row] = await db
         .insert(paymentAccounts)
         .values({
             name: normalized,
             accountType,
-            active: true,
             initialBalance,
             balanceBaselineDate,
-            creditLimit,
-            statementDay,
-            rebateConfig,
+            ...settings,
+        })
+        .onConflictDoUpdate({
+            target: paymentAccounts.name,
+            set: {
+                ...settings,
+                ...(fields?.initialBalance != null ? { initialBalance, balanceBaselineDate } : {}),
+            },
+            setWhere: and(eq(paymentAccounts.active, false), eq(paymentAccounts.accountType, accountType)),
         })
         .returning({ id: paymentAccounts.id });
 
+    if (!row) throw new PaymentAccountNameConflictError();
     return row.id;
 }
 
